@@ -1,0 +1,284 @@
+"""
+Ambulance Simulator
+A simple discrete-time simulator for ambulance operations.
+"""
+
+import os
+import sys
+import numpy as np
+import pandas as pd
+import networkx as nx
+from typing import Dict, List, Optional, Any
+import time
+
+# Add parent directory to path for imports
+current_dir = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(current_dir)
+
+# Import ambulance related classes
+from ambulance import Ambulance, AmbulanceStatus
+
+class AmbulanceSimulator:
+    """
+    Discrete-time simulator for ambulance operations.
+    
+    This simulator:
+    1. Loads synthetic call data
+    2. Initializes ambulances at base locations
+    3. Steps through time in seconds
+    4. Handles dispatch and relocation
+    5. Tracks basic statistics
+    """
+    
+    def __init__(
+        self,
+        graph: nx.Graph,
+        call_data_path: str,
+        distance_matrix: np.ndarray,
+        num_ambulances: int,
+        base_location: int,  # PFARS HQ node ID
+        hospital_node: int,
+        index_to_node: Dict[int, Any] = None,
+        node_to_index: Dict[Any, int] = None,
+        avg_speed: float = 8.33,  # Average speed in m/s (default: 30 km/h)
+        verbose: bool = False
+    ):
+        """
+        Initialize the simulator.
+        
+        Args:
+            graph: NetworkX graph of the road network
+            call_data_path: Path to call data CSV file
+            distance_matrix: Matrix of distances between nodes
+            num_ambulances: Number of ambulances to simulate
+            base_location: PFARS HQ node ID
+            hospital_node: Hospital node ID
+            index_to_node: Mapping from matrix indices to node IDs
+            node_to_index: Mapping from node IDs to matrix indices
+            avg_speed: Average speed in meters per second (m/s) for ambulance travel.
+                     Default is 8.33 m/s (30 km/h), but can be adjusted based on:
+                     - Traffic conditions
+                     - Time of day
+                     - Weather conditions
+                     - Emergency vs non-emergency travel
+            verbose: Whether to print detailed logs
+        """
+        # Store parameters
+        self.graph = graph
+        self.distance_matrix = distance_matrix
+        self.num_ambulances = num_ambulances
+        self.base_location = base_location  # PFARS HQ
+        self.hospital_node = hospital_node
+        self.avg_speed = avg_speed
+        self.verbose = verbose
+        self.node_to_index = node_to_index  # Store the node to index mapping
+        
+        # Initialize ambulances at PFARS HQ
+        self.ambulances = [
+            Ambulance(
+                amb_id=i,
+                location=base_location,  # All ambulances start at PFARS HQ
+                graph=graph,
+                distance_matrix=distance_matrix,
+                index_to_node=index_to_node,
+                node_to_index=node_to_index
+            )
+            for i in range(num_ambulances)
+        ]
+        
+        # Load call data and determine number of days
+        self.call_data = self.load_call_data(call_data_path)
+        self.scenario_days = self.call_data['day'].max()
+        self.current_call_index = 0
+        
+        # Simulation state
+        self.current_time = 0
+        self.end_time = self.scenario_days * 24 * 3600  # Convert days to seconds
+        
+        # Statistics
+        self.response_times = []
+        self.calls_responded = 0
+        self.missed_calls = 0
+        
+        # Activity tracking for visualization
+        self.ambulance_activities = {i: [] for i in range(num_ambulances)}
+        
+        # Record initial positions
+        for ambulance in self.ambulances:
+            self.ambulance_activities[ambulance.id].append({
+                'time': 0,
+                'action': 'initial_position',
+                'location': ambulance.location,
+                'status': ambulance.status
+            })
+    
+    def load_call_data(self, call_data_path: str) -> pd.DataFrame:
+        """Load and preprocess call data."""
+        df = pd.read_csv(call_data_path)
+        
+        # Sort by second_of_day for accurate chronological ordering
+        df = df.sort_values(['day', 'second_of_day'])
+        
+        if self.verbose:
+            print(f"Loaded {len(df)} calls over {df['day'].max()} days")
+            
+        return df
+    
+    def step(self) -> bool:
+        """
+        Advance simulation by one second.
+        
+        Returns:
+            bool: True if simulation should continue, False if it should end
+        """
+        # Check if simulation should end
+        if self.current_time >= self.end_time:
+            return False
+            
+        # Calculate current day and second
+        current_day = (self.current_time // (24 * 3600)) + 1
+        current_second = self.current_time % (24 * 3600)
+            
+        # Get calls that should happen at current time
+        current_calls = self.call_data[
+            (self.call_data['day'] == current_day) & 
+            (self.call_data['second_of_day'] == current_second)
+        ]
+        
+        # Process all calls for current time
+        for _, call in current_calls.iterrows():
+            self.process_call(call.to_dict())
+        
+        # Update ambulance states
+        for ambulance in self.ambulances:
+            if ambulance.status != AmbulanceStatus.IDLE and ambulance.busy_until <= self.current_time:
+                self.handle_ambulance_state_change(ambulance)
+        
+        # Advance time
+        self.current_time += 1
+        return True
+    
+    def process_call(self, call: Dict):
+        """Process a new emergency call."""
+        # Find available ambulance
+        available_ambulances = [
+            amb for amb in self.ambulances 
+            if amb.status == AmbulanceStatus.IDLE
+        ]
+        
+        if not available_ambulances:
+            self.missed_calls += 1
+            if self.verbose:
+                print(f"Time {self.current_time}: No ambulances available for call at {call['origin_node']}")
+            return
+        
+        # Select nearest available ambulance
+        call_node_idx = call['origin_node_idx']
+        selected_ambulance = min(
+            available_ambulances,
+            key=lambda amb: amb.distance_matrix[amb.node_to_index[amb.location]][call_node_idx]
+        )
+        
+        # Dispatch ambulance
+        selected_ambulance.dispatch_to_call(call, self.current_time, self.avg_speed)
+        self.calls_responded += 1
+        
+        # Record dispatch activity
+        self.ambulance_activities[selected_ambulance.id].append({
+            'time': self.current_time,
+            'action': 'dispatch',
+            'location': selected_ambulance.location,
+            'destination': call['origin_node'],
+            'status': selected_ambulance.status,
+            'call_details': call
+        })
+        
+        if self.verbose:
+            print(f"Time {self.current_time}: Dispatched ambulance {selected_ambulance.id} to call at {call['origin_node']}")
+    
+    def handle_ambulance_state_change(self, ambulance: Ambulance):
+        """Handle state changes for an ambulance."""
+        if ambulance.status == AmbulanceStatus.DISPATCHED:
+            # Arrive at scene
+            ambulance.arrive_at_scene(self.current_time)
+            self.ambulance_activities[ambulance.id].append({
+                'time': self.current_time,
+                'action': 'arrive_at_scene',
+                'location': ambulance.location,
+                'call_details': ambulance.current_call,
+                'status': ambulance.status
+            })
+            print(f"Ambulance {ambulance.id} arrived at scene at Node {ambulance.location}")
+                
+        elif ambulance.status == AmbulanceStatus.ON_SCENE:
+            # Begin transport to hospital
+            ambulance.begin_transport(self.hospital_node, self.current_time, self.avg_speed)
+            self.ambulance_activities[ambulance.id].append({
+                'time': self.current_time,
+                'action': 'begin_transport',
+                'from': ambulance.location,
+                'to': self.hospital_node,
+                'call_details': ambulance.current_call,
+                'status': ambulance.status
+            })
+            print(f"Ambulance {ambulance.id} began transport from Node {ambulance.location} to hospital at Node {self.hospital_node}")
+                
+        elif ambulance.status == AmbulanceStatus.TRANSPORT:
+            # Arrive at hospital
+            ambulance.arrive_at_hospital(self.current_time)
+            self.ambulance_activities[ambulance.id].append({
+                'time': self.current_time,
+                'action': 'arrive_at_hospital',
+                'location': ambulance.location,
+                'call_details': ambulance.current_call,
+                'status': ambulance.status
+            })
+            print(f"Ambulance {ambulance.id} arrived at hospital at Node {ambulance.location}")
+                
+        elif ambulance.status == AmbulanceStatus.HOSPITAL:
+            # After hospital transfer, begin relocation to PFARS HQ
+            ambulance.begin_transport(self.base_location, self.current_time, self.avg_speed)
+            self.ambulance_activities[ambulance.id].append({
+                'time': self.current_time,
+                'action': 'begin_relocation',
+                'from': ambulance.location,
+                'to': self.base_location,
+                'call_details': ambulance.current_call,
+                'status': ambulance.status
+            })
+            print(f"Ambulance {ambulance.id} began relocation to PFARS HQ at Node {self.base_location}")
+            
+            # Set status to IDLE but keep tracking relocation
+            ambulance.status = AmbulanceStatus.IDLE
+            ambulance.current_call = None
+    
+    def run(self) -> Dict[str, Any]:
+        """Run the simulation until completion."""
+        start_time = time.time()
+        
+        while self.step():
+            if self.verbose and self.current_time % 3600 == 0:  # Print every hour
+                print(f"Time: {self.current_time/3600:.1f} hours")
+        
+        end_time = time.time()
+        simulation_time = end_time - start_time
+        
+        # Calculate statistics
+        stats = {
+            'total_calls': len(self.call_data),
+            'calls_responded': self.calls_responded,
+            'missed_calls': self.missed_calls,
+            'avg_response_time': np.mean(self.response_times) / 60 if self.response_times else 0,  # minutes
+            'simulation_time': simulation_time,
+            'ambulance_activities': self.ambulance_activities
+        }
+        
+        if self.verbose:
+            print("\nSimulation Results:")
+            print(f"Total calls: {stats['total_calls']}")
+            print(f"Calls responded: {stats['calls_responded']}")
+            print(f"Missed calls: {stats['missed_calls']}")
+            print(f"Average response time: {stats['avg_response_time']:.2f} minutes")
+            print(f"Simulation time: {simulation_time:.2f} seconds")
+        
+        return stats 

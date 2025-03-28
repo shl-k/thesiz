@@ -2,15 +2,18 @@ from gurobipy import Model, GRB, quicksum
 import numpy as np
 
 
-def distance_matrix_to_artm_model(distance_matrix, demand_vec, p):
+def artm_model(distance_matrix, demand_vec, p):
     """
+    Average Response Time Model (ARTM)
+    
     Inputs: 
-        distance matrix (np array, shape: [demand_points, num_bases]) (units: meters)
-        demand vector (np vec: shape: [demand_points])
+        distance_matrix (np array, shape: [demand_points, num_bases]) (units: meters)
+        demand_vec (np vec: shape: [demand_points]) - demand at each point
+        p (int): maximum number of ambulances/bases
 
     Outputs:
         Gurobi model for ARTM
-        """
+    """
     # Parameters
     num_demand_points = distance_matrix.shape[0]  # Number of locations where calls are generated
     num_bases = distance_matrix.shape[1]           # Number of potential ambulance base locations
@@ -50,4 +53,6 @@ def distance_matrix_to_artm_model(distance_matrix, demand_vec, p):
     model.addConstr(quicksum(x[j] for j in J) <= p, name="AmbulanceLimit")
 
     return model
-    
+
+# For backward compatibility
+distance_matrix_to_artm_model = artm_model 

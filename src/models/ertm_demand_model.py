@@ -1,16 +1,20 @@
 from gurobipy import Model, GRB, quicksum
 import numpy as np
 
-def distance_matrix_with_demand_to_ertm_model(distance_matrix, intensity_vec, demand_vec, gamma_vec, p, q):
+def ertm_demand_model(distance_matrix, intensity_vec, demand_vec, gamma_vec, p, q):
     """
+    Expected Response Time Model with Demand (ERTM-D)
+    
     Inputs: 
         distance_matrix: [demand_points, num_bases] (meters)
         intensity_vec: [demand_points] (weights for objective)
         demand_vec: [demand_points] (actual number of calls to serve)
         gamma_vec: [demand_points] (priority/penalty weights for unmet demand)
-          (called demand_vec in artm and ertm models)
         p: max number of ambulances
         q: probability parameter for backup coverage
+
+    Outputs:
+        Gurobi model for ERTM with demand
     """
     # Parameters
     num_demand_points = distance_matrix.shape[0]
@@ -61,7 +65,15 @@ def distance_matrix_with_demand_to_ertm_model(distance_matrix, intensity_vec, de
             name=f"DemandSatisfaction_{i}"
         )
 
-    # 3. Base capacity constraints (one person per ambulance)
+    # 3. Ranks constraint
+    for i in I:
+        for j in J:
+            model.addConstr(
+                quicksum(z[i, j, k] for k in K) <= 1,
+                name=f"RankAssignment_{i}_{k}"
+            )
+
+    # 4. Base capacity constraints (one person per ambulance)
     for j in J:
         model.addConstr(
             quicksum(z[i, j, k] for i in I for k in K) <= x[j],
@@ -70,8 +82,11 @@ def distance_matrix_with_demand_to_ertm_model(distance_matrix, intensity_vec, de
 
     # 4. Total number of ambulances constraint
     model.addConstr(
-        quicksum(x[j] for j in J) <= p,
+        quicksum(x[j] for j in J) == p,
         name="TotalAmbulances"
     )
 
     return model
+
+# For backward compatibility
+distance_matrix_with_demand_to_ertm_model = ertm_demand_model 

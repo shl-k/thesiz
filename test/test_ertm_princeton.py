@@ -1,15 +1,16 @@
+import unittest
 import numpy as np
 import osmnx as ox
 import matplotlib.pyplot as plt
-from src.distance_matrix_to_ertm_model import distance_matrix_to_ertm_model
-from src.distance_matrix_to_artm_model import distance_matrix_to_artm_model
-from src.osmnx_to_distance_matrix import osmnx_to_distance_matrix
-from src.osmnx_to_graph import osmnx_to_graph
+from src.models.ertm_model import ertm_model
+from src.models.artm_model import artm_model
+from src.utils.geo_utils import create_distance_matrix
+from src.utils.geo_utils import osm_distance
+from src.utils.geo_utils import osm_graph
 
 # Get Princeton graph and distance matrix
 print('Getting Princeton graph and distance matrix...')
-G_pton = osmnx_to_graph(location='Princeton, NJ', network_type='drive')
-D_pton = osmnx_to_distance_matrix(location='Princeton, NJ', network_type='drive')
+G_pton, D_pton = create_distance_matrix(location='Princeton, NJ', network_type='drive')
 print(f'Matrix shape: {D_pton.shape}')
 
 # Generate random demand vector (same for both models)
@@ -22,7 +23,7 @@ q = 0.3  # Probability parameter for backup coverage (ERTM only)
 
 # Run ARTM model
 print('\nSolving ARTM model...')
-artm_model = distance_matrix_to_artm_model(D_pton, demand_vec, p)
+artm_model = artm_model(D_pton, demand_vec, p)
 artm_model.optimize()
 
 print('\nARTM Results:')
@@ -40,7 +41,7 @@ for v in artm_model.getVars():
 
 # Run ERTM model
 print('\nSolving ERTM model...')
-ertm_model = distance_matrix_to_ertm_model(D_pton, demand_vec, p, q)
+ertm_model = ertm_model(D_pton, demand_vec, p, q)
 ertm_model.optimize()
 
 print('\nERTM Results:')

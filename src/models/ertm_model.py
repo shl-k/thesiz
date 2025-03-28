@@ -1,16 +1,19 @@
+
 from gurobipy import Model, GRB, quicksum
 import numpy as np
 
-def distance_matrix_to_ertm_model(distance_matrix, demand_vec, p, q):
+def ertm_model(distance_matrix, demand_vec, p, q):
     """
+    Expected Response Time Model (ERTM)
+    
     Inputs: 
         distance_matrix (np array, shape: [demand_points, num_bases]) (units: meters)
-        demand_vec (np vec: shape: [demand_points])
+        demand_vec (np vec: shape: [demand_points]) - demand at each point
         p (int): maximum number of ambulances
         q (float): probability parameter for backup coverage (0 < q < 1)
 
     Outputs:
-        Gurobi model for Ranked ERTM
+        Gurobi model for ERTM
     """
     # Parameters
     num_demand_points = distance_matrix.shape[0]
@@ -26,7 +29,7 @@ def distance_matrix_to_ertm_model(distance_matrix, demand_vec, p, q):
     d = {i: demand_vec[i] for i in I}
     
     # Initialize model
-    model = Model("Ranked Expected Response Time Model")
+    model = Model("Expected Response Time Model")
 
     # Decision Variables
     x = model.addVars(J, vtype=GRB.INTEGER, name="x")  # Number of ambulances at base j
@@ -64,8 +67,11 @@ def distance_matrix_to_ertm_model(distance_matrix, demand_vec, p, q):
 
     # 3. Total number of ambulances constraint
     model.addConstr(
-        quicksum(x[j] for j in J) <= p,
+        quicksum(x[j] for j in J) == p,
         name="TotalAmbulances"
     )
 
     return model
+
+# For backward compatibility
+distance_matrix_to_ertm_model = ertm_model 
