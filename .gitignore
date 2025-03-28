@@ -20,8 +20,18 @@ wheels/
 .installed.cfg
 *.egg
 
-# Jupyter Notebook
+# Data files
+data/
+outputs/
+*.csv
+*.npy
+*.npz
+*.pkl
+*.gpickle
+
+# Jupyter
 .ipynb_checkpoints
+*.ipynb
 
 # Environment
 .env
@@ -49,4 +59,5 @@ Thumbs.db
 
 # Project specific
 cache/
-*.log 
+*.log
+logs/ 
