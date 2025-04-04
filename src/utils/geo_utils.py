@@ -41,7 +41,7 @@ def get_osm_graph(location: Optional[str] = None, bbox: Optional[Tuple] = None, 
 
 def create_distance_matrix(location: Optional[str] = None, bbox: Optional[Tuple] = None, 
                          network_type: str = 'drive', save_file: bool = False,
-                         output_dir: str = "data/matrices", sparsify: bool = True,
+                         output_dir: str = "data/matrices",
                          min_edge_length: int = 15, simplify: bool = False,
                          graph: Optional[nx.Graph] = None):
     """
@@ -71,15 +71,6 @@ def create_distance_matrix(location: Optional[str] = None, bbox: Optional[Tuple]
         G_original = get_osm_graph(location=location, bbox=bbox, network_type=network_type)
     
     print(f"Original graph: {len(G_original.nodes)} nodes, {len(G_original.edges)} edges")
-    
-    # Sparsify the graph if requested
-    if sparsify:
-        print(f"Sparsifying graph (min_edge_length={min_edge_length}, simplify={simplify})...")
-        G = sparsify_graph(G_original, min_edge_length=min_edge_length, simplify=simplify)
-        print(f"Reduction in nodes: {(1 - len(G.nodes) / len(G_original.nodes)) * 100:.2f}%")
-        print(f"Reduction in edges: {(1 - len(G.edges) / len(G_original.edges)) * 100:.2f}%")
-    else:
-        G = G_original
     
     # Ensure graph is undirected
     if not isinstance(G, nx.Graph):
@@ -125,7 +116,8 @@ def calculate_travel_time(distance: float, speed: float = 8.33) -> float:
     """
     return distance / speed  # Convert to seconds
 
-def sparsify_graph(G, min_edge_length=15, simplify=False):
+#defaulted to using osmnx's inbuilt sparsification function
+'''def sparsify_graph(G, min_edge_length=15, simplify=False):
     """
     Sparsify a graph by removing edges that are too short and ensuring connectivity.
     
@@ -193,6 +185,7 @@ def sparsify_graph(G, min_edge_length=15, simplify=False):
         print(f"After simplification: {len(G_sparse.nodes)} nodes, {len(G_sparse.edges)} edges")
     
     return G_sparse
+'''
 
 def lat_lon_to_node(G, lat, lon):
     """
@@ -206,21 +199,8 @@ def lat_lon_to_node(G, lat, lon):
     Returns:
     node_id: The OSM node ID of the nearest node
     """
-    # Get all nodes in the graph
-    nodes = list(G.nodes(data=True))
-    
-    # Find the nearest node using great-circle distance
-    min_dist = float('inf')
-    nearest_node = None
-    
-    for node, data in nodes:
-        # Calculate great-circle distance in meters
-        dist = ox.distance.great_circle(lat1=lat, lon1=lon, lat2=data['y'], lon2=data['x'])
-        if dist < min_dist:
-            min_dist = dist
-            nearest_node = node
-    
-    return nearest_node
+    return ox.distance.nearest_nodes(G, X=lon, Y=lat)
+
 
 def node_to_lat_lon(G, node_id):
     """
@@ -237,7 +217,7 @@ def node_to_lat_lon(G, node_id):
     node_data = G.nodes[node_id]
     
     # OSMnx stores coordinates as (x, y) where x is longitude and y is latitude
-    return node_data['y'], node_data['x']
+    return node_data['y'], node_data['x'] #(lat, lon)
 
 #visualization functions
 def plot_demand_heatmap(G, demand_vec, title="Demand Heatmap", filename=None, colorbar_label="Demand"):

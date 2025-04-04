@@ -21,8 +21,6 @@ from src.simulator.simulator import AmbulanceSimulator
 from src.simulator.policies import (
     NearestDispatchPolicy, 
     StaticRelocationPolicy,
-    CoverageBasedRelocationPolicy,
-    ADPPolicy
 )
 
 __version__ = '1.0.0'
@@ -34,7 +32,5 @@ __all__ = [
     'Ambulance',
     'AmbulanceStatus',
     'NearestDispatchPolicy',
-    'StaticRelocationPolicy',
-    'CoverageBasedRelocationPolicy',
-    'ADPPolicy',
+    'StaticRelocationPolicy'
 ] 

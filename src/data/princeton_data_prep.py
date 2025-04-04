@@ -11,26 +11,77 @@ import matplotlib.pyplot as plt
 from scipy.spatial import distance
 import sys
 from pathlib import Path
+import pickle
+import json
 
 # Add project root to Python path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from src.utils.geo_utils import osm_graph, osm_distance, sparsify_graph, lat_lon_to_node, create_distance_matrix
+from src.utils.geo_utils import lat_lon_to_node
 import pandas as pd
 from scipy.stats import poisson
-import json
-from sklearn.mixture import GaussianMixture
-from datetime import datetime, timedelta
 from sklearn.neighbors import KernelDensity
 
 # Constants file path
 PRINCETON_TRIPS_FILE = 'data/raw/Princeton_trip_data.csv'
 MEDICAL_TRIPS_FILE = 'data/raw/medical_trips.csv'
+SYNTHETIC_CALLS_FILE = 'data/processed/synthetic_calls.csv'
+GRAPH_FILE = 'data/processed/princeton_graph.gpickle'
+NUMDAYS = 2
 
 # Define Princeton bounding box
 # Format: (west, south, east, north)
 PRINCETON_BBOX = (-74.696560, 40.297067, -74.596615, 40.389835)
+
+def generate_graph(bbox=PRINCETON_BBOX, network_type='drive'):
+    """
+    Generate a graph of Princeton using OSMnx.
+    
+    Parameters:
+        bbox: Bounding box of Princeton
+    """
+    G = ox.graph_from_bbox(bbox, network_type=network_type, simplify=True)
+    print(f"After graph_from_bbox: type(G) = {type(G)}")
+    
+    G = ox.project_graph(G) 
+    print(f"After project_graph: type(G) = {type(G)}")
+    
+    G  = ox.simplification.consolidate_intersections(
+        G ,
+        tolerance=15,
+        rebuild_graph=True,
+        reconnect_edges=True
+    )
+    print(f"After consolidate_intersections: type(G) = {type(G)}")
+    
+    # Find strongly connected components and keep only the largest one
+    strongly_connected_components = list(nx.strongly_connected_components(G))
+    print(f"Type of strongly_connected_components: {type(strongly_connected_components)}")
+    print(f"Type of first component: {type(strongly_connected_components[0])}")
+    
+    largest_component = max(strongly_connected_components, key=len)
+    print(f"Type of largest_component: {type(largest_component)}")
+    
+    # Create a subgraph with only the largest component
+    G = G.subgraph(largest_component).copy()
+    print(f"After subgraph: type(G) = {type(G)}")
+    
+    G = ox.routing.add_edge_speeds(G)
+    print(f"After add_edge_speeds: type(G) = {type(G)}")
+    
+    G = ox.routing.add_edge_travel_times(G)
+    print(f"After add_edge_travel_times: type(G) = {type(G)}")
+    
+    G = ox.project_graph(G, to_crs='epsg:4326')  # convert back to lat/lon
+    print(f"After project_graph to lat/lon: type(G) = {type(G)}")
+    
+    os.makedirs('data/processed', exist_ok=True)
+    with open('data/processed/princeton_graph.gpickle', 'wb') as f:
+        pickle.dump(G, f)
+    return G
+    
+
 
 def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FILE, num_days=7):
     """
@@ -45,8 +96,7 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
     Returns:
     synthetic_calls: DataFrame with day, timestamp, origin node, destination (hospital) node, and intensity
     """
-    # Load medical trips data
-    print("Loading medical trips data...")
+    
     medical_trips = pd.read_csv(MEDICAL_TRIPS_FILE)
     
     # Get PFARS HQ node and hospital node
@@ -63,35 +113,8 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
     
     # Get all valid nodes in the sparsified graph
     valid_nodes = list(G.nodes(data=True))
+
     print(f"Generating calls using {len(valid_nodes)} valid nodes in sparsified graph")
-    
-    # Create node ID mappings - ensure critical nodes get consistent indices
-    print("Creating node ID mappings...")
-    node_to_index = {}
-    index_to_node = {}
-    
-    # Add critical nodes first to ensure they get consistent indices
-    critical_nodes = [pfars_node, hospital_node]
-    for i, node_id in enumerate(critical_nodes):
-        node_to_index[node_id] = i
-        index_to_node[i] = node_id
-        print(f"Critical node {node_id} mapped to index {i}")
-    
-    # Then add all other valid nodes
-    for i, (node_id, _) in enumerate(valid_nodes):
-        if node_id not in node_to_index:
-            node_to_index[node_id] = len(node_to_index)
-            index_to_node[len(index_to_node)] = node_id
-    
-    print(f"Created mapping with {len(node_to_index)} nodes")
-    
-    # Save node mappings to file
-    os.makedirs('data/matrices', exist_ok=True)
-    with open('data/matrices/node_to_index.json', 'w') as f:
-        json.dump(node_to_index, f)
-    with open('data/matrices/index_to_node.json', 'w') as f:
-        json.dump(index_to_node, f)
-    print("Node ID mappings saved")
     
     # Create spatial distribution from historical data
     # Extract origin coordinates from medical trips
@@ -179,13 +202,11 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
                 'timestamp': timestamp,
                 'origin_lat': node_data['y'],
                 'origin_lon': node_data['x'],
-                'origin_node': str(node_id),
-                'origin_node_idx': node_to_index[str(node_id)],
-                'destination_node': str(hospital_node),
-                'destination_node_idx': node_to_index[str(hospital_node)],
+                'origin_node': node_id,
+                'destination_node': hospital_node,
                 'intensity': intensity
             })
-    
+
     # Convert to DataFrame
     calls_df = pd.DataFrame(synthetic_calls)
     
@@ -394,6 +415,11 @@ def visualize_graph(G, pfars_node, hospital_node, title="Princeton Road Network"
     # Get coordinates for all nodes
     node_coords = {node: (data['x'], data['y']) for node, data in G.nodes(data=True)}
     
+    # Debug print coordinates
+    print("\nDebug - Visualization coordinates:")
+    print(f"PFARS node {pfars_node}: {node_coords[pfars_node]}")
+    print(f"Hospital node {hospital_node}: {node_coords[hospital_node]}")
+    
     # Plot PFARS HQ
     pfars_coords = node_coords[pfars_node]
     ax.scatter(pfars_coords[0], pfars_coords[1], c='red', s=100, label='PFARS HQ')
@@ -418,99 +444,170 @@ def visualize_graph(G, pfars_node, hospital_node, title="Princeton Road Network"
     print(f"Total nodes: {len(G.nodes)}")
     print(f"Total edges: {len(G.edges)}")
 
-def main():
-    # Check if medical trips file exists
-    if not os.path.exists(MEDICAL_TRIPS_FILE):
-        raise FileNotFoundError(f"Medical trips file not found: {MEDICAL_TRIPS_FILE}")
+def visualize_medical_trips(G, medical_trips_file=MEDICAL_TRIPS_FILE, title="Princeton Medical Trip Origins"):
+    """
+    Visualize all medical trip origin points on the graph.
     
-    # Get Princeton graph and data
-    print('\nGetting Princeton graph...')
-    G_pton_original = osm_graph(bbox=PRINCETON_BBOX, network_type='drive')
-    print(f"Original graph: {len(G_pton_original.nodes)} nodes, {len(G_pton_original.edges)} edges")
+    Args:
+        G: NetworkX graph
+        medical_trips_file: Path to the medical trips CSV file
+        title: Plot title
+    """
+    # Read medical trips data
+    trips_df = pd.read_csv(medical_trips_file)
     
-    # Convert to directed graph and simplify using OSMnx
-    print('\nSimplifying graph using OSMnx...')
-    G_directed = G_pton_original.to_directed()
-    G_simple = ox.simplify_graph(G_directed)
-    print(f"After simplification: {len(G_simple.nodes)} nodes, {len(G_simple.edges)} edges")
+    # Create figure
+    fig, ax = plt.subplots(figsize=(15, 15))
     
-    # Convert back to undirected and ensure it's connected
-    print('\nConverting to undirected and ensuring connectivity...')
-    G_pton = G_simple.to_undirected()
-    if not nx.is_connected(G_pton):
-        print("Graph is not connected, keeping only the largest component...")
-        largest_cc = max(nx.connected_components(G_pton), key=len)
-        G_pton = G_pton.subgraph(largest_cc).copy()
-        print(f"After keeping largest component: {len(G_pton.nodes)} nodes, {len(G_pton.edges)} edges")
+    # Plot the base graph
+    ox.plot_graph(G, ax=ax, node_size=0, edge_color='gray', edge_linewidth=0.5, show=False)
     
-    # Find closest nodes to critical locations in the simplified graph
-    print('\nFinding closest nodes to critical locations...')
-    pfars_lat, pfars_lon = 40.361395, -74.664879
-    hospital_lat, hospital_lon = 40.340339, -74.623913
+    # Get coordinates for all nodes
+    node_coords = {node: (data['x'], data['y']) for node, data in G.nodes(data=True)}
     
-    # Get all node coordinates
-    node_coords = {node: (data['y'], data['x']) for node, data in G_pton.nodes(data=True)}
+    # Plot each origin point
+    for _, trip in trips_df.iterrows():
+        # Find nearest node for origin
+        
+        # Plot origin point using lat/lon coordinates
+        ax.scatter(trip['origin_lon'], trip['origin_lat'], c='red', s=50, alpha=0.5)
+        
+        # Print origin node info
+        #print(f"Origin: {trip['origin_name']}, Node: {origin_node}, Coords: ({trip['origin_lat']}, {trip['origin_lon']})")
     
-    # Find closest nodes using distance calculation
-    def find_closest_node(target_lat, target_lon):
-        min_dist = float('inf')
-        closest_node = None
-        for node, (lat, lon) in node_coords.items():
-            dist = ((lat - target_lat)**2 + (lon - target_lon)**2)**0.5
-            if dist < min_dist:
-                min_dist = dist
-                closest_node = node
-        return closest_node, min_dist
+    # Add legend
+    from matplotlib.lines import Line2D
+    legend_elements = [
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='red', 
+               markersize=10, label='Call Origin')
+    ]
+    ax.legend(handles=legend_elements, loc='upper right')
     
-    # Find closest nodes
-    pfars_node, pfars_dist = find_closest_node(pfars_lat, pfars_lon)
-    hospital_node, hospital_dist = find_closest_node(hospital_lat, hospital_lon)
+    # Add title
+    ax.set_title(title)
     
-    print(f"PFARS HQ closest node: {pfars_node} (distance: {pfars_dist:.6f} degrees)")
-    print(f"Hospital closest node: {hospital_node} (distance: {hospital_dist:.6f} degrees)")
+    # Save the plot
+    plt.savefig('data/processed/princeton_medical_origins.png', dpi=300, bbox_inches='tight')
+    plt.close()
     
-    # Create node ID mappings
-    print('\nCreating node ID mappings...')
-    node_to_index = {}
-    index_to_node = {}
+    print(f"\nMedical trip origins visualization saved to data/processed/princeton_medical_origins.png")
+    print(f"Total origins plotted: {len(trips_df)}")
+
+def generate_node_list(G):
+    """
+    Generate node ID to index mappings and save them to JSON files.
+    These mappings are used by the simulator to convert between node IDs and indices.
     
-    # Add critical nodes first to ensure they get consistent indices
-    critical_nodes = [pfars_node, hospital_node]
-    for i, node_id in enumerate(critical_nodes):
-        node_to_index[node_id] = i
-        index_to_node[i] = node_id
-        print(f"Critical node {node_id} mapped to index {i}")
+    Args:
+        G: NetworkX graph
+    """
+    node_list = list(G.nodes)
+    node_id_to_idx = {node: idx for idx, node in enumerate(node_list)}
+    idx_to_node_id = {idx: node for idx, node in enumerate(node_list)}
     
-    # Then add all other valid nodes
-    for i, node_id in enumerate(G_pton.nodes):
-        if node_id not in node_to_index:
-            node_to_index[node_id] = len(node_to_index)
-            index_to_node[len(index_to_node)] = node_id
-    
-    print(f"Created mapping with {len(node_to_index)} nodes")
-    
-    # Save node mappings to file
+    # Create the matrices directory if it doesn't exist
     os.makedirs('data/matrices', exist_ok=True)
-    with open('data/matrices/node_to_index.json', 'w') as f:
-        json.dump(node_to_index, f)
-    with open('data/matrices/index_to_node.json', 'w') as f:
-        json.dump(index_to_node, f)
-    print("Node ID mappings saved")
     
-    # Save the graph
-    os.makedirs('data/processed', exist_ok=True)
-    import pickle
-    with open('data/processed/princeton_graph.gpickle', 'wb') as f:
-        pickle.dump(G_pton, f)
-    print("Graph saved to princeton_graph.gpickle")
+    # Convert dictionary keys to strings for JSON serialization
+    node_id_to_idx_str = {str(k): v for k, v in node_id_to_idx.items()}
+    idx_to_node_id_str = {str(k): int(v) for k, v in idx_to_node_id.items()}
+
+    # Save to JSON files
+    with open(os.path.join('data/matrices', 'node_id_to_idx.json'), 'w') as f:
+        json.dump(node_id_to_idx_str, f, indent=2)
     
+    with open(os.path.join('data/matrices', 'idx_to_node_id.json'), 'w') as f:
+        json.dump(idx_to_node_id_str, f, indent=2)
+    
+    print(f"Generated node mappings for {len(node_list)} nodes")
+    print(f"Saved node mappings to data/matrices/node_id_to_idx.json and data/matrices/idx_to_node_id.json")
+
+def precompute_shortest_paths(G, weight='travel_time'):
+    """
+    Precompute the shortest paths for every source node in the graph.
+    Returns a dictionary where for each source node, there is a dictionary mapping 
+    each target node to a dict with 'travel_time' and 'path'.
+    """
+    shortest_paths = {}
+    for source in G.nodes:
+        lengths, paths = nx.single_source_dijkstra(G, source, weight=weight)
+        shortest_paths[source] = {
+            target: {
+                'travel_time': lengths[target],
+                'path': paths[target],
+                'length': nx.path_weight(G, paths[target], weight='length')
+            }
+            for target in lengths
+        }
+
+    
+    # Ensure the output directory exists
+    output_dir = "data/matrices"
+    os.makedirs(output_dir, exist_ok=True)
+    output_file = os.path.join(output_dir, "path_cache.pkl")
+
+    # Save the shortest paths cache to a pickle file
+    with open(output_file, "wb") as f:
+        pickle.dump(shortest_paths, f)
+
+    # Print summary information
+    num_nodes = len(shortest_paths)
+    total_targets = sum(len(v) for v in shortest_paths.values())
+    avg_targets = total_targets / num_nodes if num_nodes > 0 else 0
+    print(f"Precomputed shortest paths for {num_nodes} nodes.")
+    print(f"Total target entries: {total_targets} (average {avg_targets:.2f} per source).")
+    print(f"Path cache saved to: {output_file}")
+
+    return shortest_paths
+
+def main():
+    # Check if graph file exists, if not generate it
+    if not os.path.exists(GRAPH_FILE):
+        print("Generating new graph...")
+        G = generate_graph(PRINCETON_BBOX, network_type='drive')
+    else:
+        print("Loading existing graph...")
+        G = pickle.load(open(GRAPH_FILE, 'rb'))
+
+    # Generate node list for mapping node IDs to indices
+    #generate_node_list(G)
+
+    #generate synthetic calls
+    generate_demand_with_temporal_pattern(G, num_days=NUMDAYS)
+    
+    print("G is of type:", type(G))
+    print(f"Original graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
+    
+    # Get PFARS HQ node and hospital node
+    print("\nDebug - PFARS HQ coordinates:")
+    print(f"Lat: 40.361395, Lon: -74.664879")
+    pfars_node = lat_lon_to_node(G, 40.361395, -74.664879)
+    print(f"Found PFARS node: {pfars_node}")
+    print(f"PFARS node coordinates: {G.nodes[pfars_node]['y']}, {G.nodes[pfars_node]['x']}")
+    
+    print("\nDebug - Hospital coordinates:")
+    print(f"Lat: 40.340339, Lon: -74.623913")
+    hospital_node = lat_lon_to_node(G, 40.340339, -74.623913)
+    print(f"Found hospital node: {hospital_node}")
+    print(f"Hospital node coordinates: {G.nodes[hospital_node]['y']}, {G.nodes[hospital_node]['x']}")
+    
+    # Precompute shortest paths
+    precompute_shortest_paths(G)
+
     # Generate demand patterns using actual medical trips data
-    print('\nGenerating demand patterns...')
-    generate_demand_with_temporal_pattern(G_pton, num_days=7)
+    #print('\nGenerating demand patterns...')
+    #generate_demand_with_temporal_pattern(G, num_days=7)
     
-    # Visualize the simplified graph
-    print('\nVisualizing simplified graph...')
-    visualize_graph(G_pton, pfars_node, hospital_node, "Simplified Princeton Road Network")
+    # Visualize the graph with critical nodes
+    #visualize_graph(G, pfars_node, hospital_node, "Princeton Road Network")
+    
+    # Visualize medical trips
+    #visualize_medical_trips(G, MEDICAL_TRIPS_FILE, "Princeton Medical Trip Origins")
+    
+    # Visualize synthetic calls
+    #visualize_medical_trips(G, SYNTHETIC_CALLS_FILE, "Princeton Synthetic Call Origins")
+
 
 if __name__ == "__main__":
+    #print("this is working")
     main()

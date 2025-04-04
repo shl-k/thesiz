@@ -1,0 +1,16 @@
+{
+    "base_locations": [
+        {
+            "name": "PFARS HQ",
+            "lat": 40.361395,
+            "lon": -74.664879
+        }
+    ],
+    "hospital_locations": [
+        {
+            "name": "Penn Medicine Princeton Medical Center",
+            "lat": 40.340339,
+            "lon": -74.623913
+        }
+    ]
+}
