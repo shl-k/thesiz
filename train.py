@@ -8,26 +8,27 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.vec_env import DummyVecEnv
 from stable_baselines3.common.callbacks import EvalCallback
+from gymnasium.wrappers import TimeLimit  # <-- Import the TimeLimit wrapper
 
 # Your environment
 from src.rl.AmbulanceEnv import AmbulanceEnv
 
 def main():
-    #load graph 
+    # 1) Load graph 
     with open('data/processed/princeton_graph.gpickle', 'rb') as f:
         G = pickle.load(f)
     
-    # Critical nodes (these should be consistent from princeton_data_prep.py)
-    pfars_node = 241  # PFARS HQ
-    hospital_node = 1293  # Hospital
+    # Critical nodes (these should be consistent with princeton_data_prep.py)
+    pfars_node = 241  # PFARS HQ node
+    hospital_node = 1293  # Hospital node
 
     call_data_path = 'data/processed/synthetic_calls.csv'
 
-    # 3) Provide JSON node mapping, or load from actual files
+    # 2) Provide JSON node mapping, or load from files
     idx_to_node_path = "data/matrices/idx_to_node_id.json"
     node_to_idx_path = "data/matrices/node_id_to_idx.json"
 
-    # 4) Create the environment
+    # 3) Create the environment
     env = AmbulanceEnv(
         graph=G,
         call_data_path=call_data_path,
@@ -38,17 +39,19 @@ def main():
         node_to_idx_path=node_to_idx_path,
         verbose=False
     )
+    # Wrap your environment with a TimeLimit to force termination after max_episode_steps:
+    max_episode_steps = 1000  # adjust this number as needed
+    env = TimeLimit(env, max_episode_steps=max_episode_steps)
 
-    # 5) Wrap the environment in a Monitor, which logs episode rewards to a file
+    # 4) Wrap the environment in a Monitor to log episode rewards
     log_dir = "./logs"
     os.makedirs(log_dir, exist_ok=True)
     monitored_env = Monitor(env, filename=os.path.join(log_dir, "ambulance_monitor.csv"))
 
-    # 6) If you want multi-env or just single, you can do:
+    # 5) Create a vectorized environment (here we use a single environment)
     vec_env = DummyVecEnv([lambda: monitored_env])
 
-    # 7) (Optional) Setup an evaluation callback
-    #    We'll create a separate environment for evaluation
+    # 6) Setup an evaluation callback (optional)
     eval_env = DummyVecEnv([lambda: Monitor(AmbulanceEnv(
         graph=G,
         call_data_path=call_data_path,
@@ -70,41 +73,35 @@ def main():
         render=False
     )
 
-    # 8) Create the PPO model
+    # 7) Create the PPO model – you can force the device to "cuda" if desired
     model = PPO(
         policy="MlpPolicy",
         env=vec_env,
         verbose=1,
         tensorboard_log=os.path.join(log_dir, "tensorboard"),
-        n_steps=256,         # <-- Much shorter rollout interval
-        batch_size=64,       # Optional but keeps it balanced
+        n_steps=256,
+        batch_size=64,
         learning_rate=2.5e-4,
-        gamma=0.99
+        gamma=0.99,
+        device="cpu"  # force GPU usage if available
     )
 
-    # 9) Train
-    #    Provide callback=eval_callback if you want periodic evaluation logs
-    run_name = "hehe"
-    model.learn(total_timesteps=1_000, callback=eval_callback, tb_log_name=run_name)
+    # 8) Train the model (adjust total_timesteps as needed)
+    run_name = "run_with_timelimit"
+    model.learn(total_timesteps=10_000, callback=eval_callback, tb_log_name=run_name)
 
-    # 10) (Optional) Evaluate final policy
-    #     Let's do a quick deterministic rollout
+    # 9) Evaluate final policy in a short rollout
     obs, info = env.reset()
     done = False
     total_reward = 0
     while not done:
-        # model.predict returns (action, state), we only need action
         action, _states = model.predict(obs, deterministic=True)
-        # Unpack the Gymnasium step return format
         obs, reward, terminated, truncated, info = env.step(action)
         total_reward += reward
         done = terminated or truncated
         
     print(f"Final policy test episode reward: {total_reward}")
-
-    # 11) Print final logs or handle cleanup
-    print("Training complete! Check logs/ folder for monitor files and best model.")
-    # The user can parse the CSV logs or load them into e.g. Pandas for further analysis
+    print("Training complete! Check the logs/ folder for monitor files and best model.")
 
 if __name__ == "__main__":
     main()
