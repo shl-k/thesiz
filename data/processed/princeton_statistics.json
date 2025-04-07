@@ -3,14 +3,16 @@
         {
             "name": "PFARS HQ",
             "lat": 40.361395,
-            "lon": -74.664879
+            "lon": -74.664879,
+            "node_id": 241
         }
     ],
     "hospital_locations": [
         {
             "name": "Penn Medicine Princeton Medical Center",
             "lat": 40.340339,
-            "lon": -74.623913
+            "lon": -74.623913,
+            "node_id": 1293
         }
     ]
 }

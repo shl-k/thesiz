@@ -7,18 +7,18 @@ import numpy as np
 import osmnx as ox
 import networkx as nx
 import os
-import matplotlib.pyplot as pltpip 
 from scipy.spatial import distance
 import sys
 from pathlib import Path
 import pickle
 import json
+import matplotlib.pyplot as plt
 
 # Add project root to Python path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
 
-from src.utils.geo_utils import lat_lon_to_node
+from src.utils.geo_utils import lat_lon_to_node, node_to_lat_lon
 import pandas as pd
 from scipy.stats import poisson
 from sklearn.neighbors import KernelDensity
@@ -28,7 +28,10 @@ PRINCETON_TRIPS_FILE = 'data/raw/Princeton_trip_data.csv'
 MEDICAL_TRIPS_FILE = 'data/raw/medical_trips.csv'
 SYNTHETIC_CALLS_FILE = 'data/processed/synthetic_calls.csv'
 GRAPH_FILE = 'data/processed/princeton_graph.gpickle'
-NUMDAYS = 2
+PATH_CACHE_FILE = 'data/matrices/path_cache.pkl'
+NODE_TO_LAT_LON_FILE = 'data/matrices/node_to_lat_lon.json'
+LAT_LON_TO_NODE_FILE = 'data/matrices/lat_lon_to_node.json'
+NUMDAYS = 7
 
 # Define Princeton bounding box
 # Format: (west, south, east, north)
@@ -487,10 +490,10 @@ def visualize_medical_trips(G, medical_trips_file=MEDICAL_TRIPS_FILE, title="Pri
     ax.set_title(title)
     
     # Save the plot
-    plt.savefig('data/processed/princeton_medical_origins.png', dpi=300, bbox_inches='tight')
+    plt.savefig('data/processed/princeton_synthetic_origins.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\nMedical trip origins visualization saved to data/processed/princeton_medical_origins.png")
+    print(f"\nMedical trip origins visualization saved to data/processed/princeton_synthetic_origins.png")
     print(f"Total origins plotted: {len(trips_df)}")
 
 def generate_node_list(G):
@@ -560,6 +563,82 @@ def precompute_shortest_paths(G, weight='travel_time'):
 
     return shortest_paths
 
+def calculate_average_travel_time(G, path_cache):
+    total_travel_time = 0
+    total_paths = 0
+
+    for source in G.nodes:
+        for target in G.nodes:
+            if source != target:
+                travel_time = path_cache[source][target]['travel_time']
+                total_travel_time += travel_time
+                total_paths += 1
+
+    average_travel_time = total_travel_time / total_paths
+    return average_travel_time
+
+def generate_lat_lon_to_node_mapping(graph_file=GRAPH_FILE, output_file=LAT_LON_TO_NODE_FILE):
+    """
+    Generate a mapping from (lat, lon) coordinates to node IDs.
+    """
+    print(f"Loading graph from {graph_file}...")
+    with open(graph_file, 'rb') as f:
+        G = pickle.load(f)
+    
+    print(f"Generating lat/lon to node mapping for {len(G.nodes)} nodes...")
+    lat_lon_to_node = {}
+    
+    for node_id in G.nodes():
+        try:
+            lat, lon = G.nodes[node_id]['y'], G.nodes[node_id]['x']
+            # Use tuple of lat/lon as key, node_id as value
+            lat_lon_to_node[f"{lat},{lon}"] = node_id
+        except Exception as e:
+            print(f"Error extracting coordinates for node {node_id}: {e}")
+    
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    # Save to JSON file
+    with open(output_file, 'w') as f:
+        json.dump(lat_lon_to_node, f, indent=2)
+
+def generate_node_to_lat_lon_mapping(graph_file=GRAPH_FILE, 
+                               output_file=NODE_TO_LAT_LON_FILE):
+    """
+    Generate a mapping from node IDs to (lat, lon) coordinates.
+    
+    Args:
+        graph_file: Path to the pickled NetworkX graph file
+        output_file: Path to save the node coordinates JSON file
+    """
+    print(f"Loading graph from {graph_file}...")
+    with open(graph_file, 'rb') as f:
+        G = pickle.load(f)
+    
+    print(f"Generating coordinates mapping for {len(G.nodes)} nodes...")
+    node_coords = {}
+    
+    # Extract coordinates for each node
+    for node_id in G.nodes():
+        try:
+            lat, lon = node_to_lat_lon(G, node_id)
+            node_coords[str(node_id)] = [lat, lon]
+        except Exception as e:
+            print(f"Error extracting coordinates for node {node_id}: {e}")
+    
+    # Create directory if it doesn't exist
+    os.makedirs(os.path.dirname(output_file), exist_ok=True)
+    
+    # Save to JSON file
+    with open(output_file, 'w') as f:
+        json.dump(node_coords, f, indent=2)
+    
+    print(f"Generated coordinates for {len(node_coords)} nodes")
+    print(f"Saved node coordinates to {output_file}")
+    
+    return node_coords            
+
 def main():
     # Check if graph file exists, if not generate it
     if not os.path.exists(GRAPH_FILE):
@@ -568,13 +647,41 @@ def main():
     else:
         print("Loading existing graph...")
         G = pickle.load(open(GRAPH_FILE, 'rb'))
+    '''
+    # Check if path cache exists, if not generate it
+    if not os.path.exists(PATH_CACHE_FILE):
+        print("Generating new path cache...")
+        path_cache = precompute_shortest_paths(G)
+    else:
+        print("Loading existing path cache...")
+        path_cache = pickle.load(open(PATH_CACHE_FILE, 'rb'))   
+
+    # Check if lat/lon mapping exists, if not generate it
+    if not os.path.exists(LAT_LON_TO_NODE_FILE):
+        print("Generating new lat/lon mapping...")
+        lat_lon_mapping = generate_lat_lon_to_node_mapping(GRAPH_FILE)
+    else:
+        print("Loading existing lat/lon mapping...")
+        lat_lon_mapping = pickle.load(open(LAT_LON_TO_NODE_FILE, 'rb'))
+    '''
+    # Calculate average travel time
+    #average_travel_time = calculate_average_travel_time(G, path_cache)
+    #print(f"Average travel time: {average_travel_time:.2f} seconds")
 
     # Generate node list for mapping node IDs to indices
-    #generate_node_list(G)
+    #enerate_node_list(G)
+
+    # Generate lat/lon to node mapping
+    generate_lat_lon_to_node_mapping(GRAPH_FILE)
+
+    # Generate node to lat/lon mapping
+    generate_node_to_lat_lon_mapping(GRAPH_FILE)
+
 
     #generate synthetic calls
-    generate_demand_with_temporal_pattern(G, num_days=NUMDAYS)
-    
+    #generate_demand_with_temporal_pattern(G, num_days=NUMDAYS)
+
+    '''
     print("G is of type:", type(G))
     print(f"Original graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
     
@@ -590,13 +697,7 @@ def main():
     hospital_node = lat_lon_to_node(G, 40.340339, -74.623913)
     print(f"Found hospital node: {hospital_node}")
     print(f"Hospital node coordinates: {G.nodes[hospital_node]['y']}, {G.nodes[hospital_node]['x']}")
-    
-    # Precompute shortest paths
-    precompute_shortest_paths(G)
-
-    # Generate demand patterns using actual medical trips data
-    #print('\nGenerating demand patterns...')
-    #generate_demand_with_temporal_pattern(G, num_days=7)
+    '''
     
     # Visualize the graph with critical nodes
     #visualize_graph(G, pfars_node, hospital_node, "Princeton Road Network")
@@ -606,6 +707,8 @@ def main():
     
     # Visualize synthetic calls
     #visualize_medical_trips(G, SYNTHETIC_CALLS_FILE, "Princeton Synthetic Call Origins")
+
+
 
 
 if __name__ == "__main__":
