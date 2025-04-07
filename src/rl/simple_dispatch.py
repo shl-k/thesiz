@@ -204,27 +204,36 @@ class SimpleDispatchEnv(gym.Env):
                         if dispatch_success:
                             # Reward is negative travel time scaled by call priority, but less severe
                             call_priority = self.current_call.get("intensity", 1.0)  # Default priority is 1.0
-                            reward -= travel_time * call_priority  # Reduced travel time penalty
-                            reward += 100  # Small positive reward for attempting dispatch with available ambulance
+                            # Scale travel time penalty by 0.5 to reduce its impact
+                            travel_time_penalty = travel_time * call_priority * 0.5
+                            # Add time-based bonus: exponentially higher rewards for faster response
+                            time_bonus = 500 * np.exp(-travel_time / 600)  # 600s (10 min) as reference time
+                            reward -= travel_time_penalty
+                            reward += 500  # Increased base reward for dispatch (was 100)
+                            reward += time_bonus
                             if self.verbose:
-                                print(f"Dispatch reward: +100 - {travel_time:.1f} * {call_priority:.2f} = {100 - travel_time * 0.5 * call_priority:.1f}")
+                                print(f"Dispatch reward breakdown:")
+                                print(f"  Base reward: +500")
+                                print(f"  Travel time penalty: -{travel_time_penalty:.1f}")
+                                print(f"  Time bonus: +{time_bonus:.1f}")
+                                print(f"  Total: {500 - travel_time_penalty + time_bonus:.1f}")
                         else:
                             # Penalty for failed dispatch - scaled by priority but not as harsh
                             call_priority = self.current_call.get("intensity", 1.0)
-                            reward -= 500 * call_priority  # Reduced base penalty from 1000 to 500
+                            reward -= 300 * call_priority  # Reduced from 500 to 300
                             if self.verbose:
-                                print(f"Failed dispatch penalty: -500 * {call_priority:.2f} = {-500 * call_priority:.1f}")
+                                print(f"Failed dispatch penalty: -300 * {call_priority:.2f} = {-300 * call_priority:.1f}")
                     else:
                         # Penalty for trying to dispatch unavailable ambulance - same as failed dispatch
                         call_priority = self.current_call.get("intensity", 1.0)
-                        reward -= 500 * call_priority
+                        reward -= 300 * call_priority  # Reduced from 500 to 300
                         if self.verbose:
-                            print(f"Unavailable ambulance penalty: -500 * {call_priority:.2f} = {-500 * call_priority:.1f}")
+                            print(f"Unavailable ambulance penalty: -300 * {call_priority:.2f} = {-300 * call_priority:.1f}")
                 else:
                     # No ambulance dispatched - strong penalty to discourage this behavior
-                    reward -= 1000  # Back to -1000 to strongly discourage no dispatch
+                    reward -= 800  # Reduced from 1000 to 800
                     if self.verbose:
-                        print(f"No dispatch penalty: -1000")
+                        print(f"No dispatch penalty: -800")
                 
                 # Increment step counter
                 self.steps += 1
@@ -252,9 +261,9 @@ class SimpleDispatchEnv(gym.Env):
                 call_id = event_data.get("call_id")
                 if call_id == self.current_call.get("call_id"):
                     # Large positive reward for successful delivery
-                    reward += 3000  # Increased from 2000 to 3000
+                    reward += 5000  # Increased from 3000 to 5000
                     if self.verbose:
-                        print(f"Successful delivery to hospital for call {call_id}")
+                        print(f"Successful delivery to hospital for call {call_id}: +5000")
             # We don't need to handle other event types as the simulator will process them
     
     def render(self):

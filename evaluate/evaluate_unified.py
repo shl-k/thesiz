@@ -121,20 +121,21 @@ def create_environment(G, calls_df, path_cache, node_to_idx, idx_to_node, verbos
 
 def evaluate_rl_model(model, env, verbose=False):
     """Evaluate a trained RL model in the given environment."""
+    print("\n===== Starting RL Model Evaluation =====")
+    event_count = 0
     call_count = 0
-    dispatched_calls = 0
-    missed_calls = 0
+    call_ids_seen = set()  # Track all call IDs seen
+    
+    # Detailed tracking by call ID
+    call_details = {}  # call_id -> dict of details about the call
+    hospital_deliveries = set()  # Call IDs where patient was delivered to hospital
     all_response_times = []
-    amb_utilization = [0] * NUM_AMBULANCES
-    amb_busy_when_selected = [0] * NUM_AMBULANCES
     total_reward = 0.0
     history = []
     
     # Reset environment
     obs, _ = env.reset()
     done = False
-    
-    print("\n===== Starting RL Model Evaluation =====")
     
     while not done:
         # Get the next event
@@ -145,54 +146,92 @@ def evaluate_rl_model(model, env, verbose=False):
         # Use the model to predict the best action
         action, _ = model.predict(obs, deterministic=True)
         
-        # For call arrivals, check ambulance status BEFORE stepping
+        # Track call arrivals 
         if next_event and event_type == "call_arrival":
+            call_id = event_data.get("call_id", "unknown")
+            call_ids_seen.add(call_id)
             call_count += 1
-            call_node = event_data["origin_node"]
             
-            # Determine which ambulance was chosen
-            chosen_amb = int(action) if isinstance(action, (np.ndarray, list, int, np.int64)) else action
+            # Initialize call details
+            call_details[call_id] = {
+                "time": event_time,
+                "origin_node": event_data.get("origin_node", "unknown"),
+                "dispatched": False,
+                "ambulance_id": None,
+                "arrived_at_scene": False,
+                "arrived_at_hospital": False,
+                "timed_out": False,
+                "available_ambulances": sum(1 for amb in env.simulator.ambulances if amb.is_available())
+            }
             
-            if chosen_amb < NUM_AMBULANCES:
-                # Check if ambulance is available
-                amb = env.simulator.ambulances[chosen_amb]
-                if amb.is_available():
-                    dispatched_calls += 1
-                    amb_utilization[chosen_amb] += 1
-                    
-                    if verbose:
-                        print(f"\n📞 Call at {format_time(env.simulator.current_time)}:")
-                        print(f"   From node {call_node} to {HOSPITAL_NODE}")
-                        print(f"   ✅ Dispatched ambulance {chosen_amb}")
-                else:
-                    missed_calls += 1
-                    amb_busy_when_selected[chosen_amb] += 1
-                    
-                    if verbose:
-                        print(f"\n📞 Call at {format_time(env.simulator.current_time)}:")
-                        print(f"   From node {call_node} to {HOSPITAL_NODE}")
-                        print(f"   ❌ Ambulance {chosen_amb} busy - status: {amb.status.name}")
-            else:
-                missed_calls += 1
-                if verbose:
-                    print(f"\n📞 Call at {format_time(env.simulator.current_time)}:")
-                    print(f"   From node {call_node} to {HOSPITAL_NODE}")
-                    print(f"   ❌ No ambulance dispatched (action: {chosen_amb})")
+            if verbose:
+                print(f"\nCall {call_count}: ID={call_id} at time {format_time(event_time)}")
+                print(f"  Available ambulances: {call_details[call_id]['available_ambulances']}/{NUM_AMBULANCES}")
         
         # Take a step in the environment
         next_obs, reward, terminated, truncated, _ = env.step(action)
         total_reward += reward
         
-        # After stepping, record response time for successful dispatches
-        if next_event and event_type == "call_arrival" and isinstance(action, (int, np.int64, np.ndarray)) and int(action) < NUM_AMBULANCES:
-            amb = env.simulator.ambulances[int(action)]
-            # Calculate response time based on the ambulance's busy_until
-            if amb.busy_until > env.simulator.current_time:  # If busy_until was updated, a dispatch occurred
-                response_time = amb.busy_until - env.simulator.current_time
-                all_response_times.append(response_time)
-                
+        # Track ambulance dispatches
+        if next_event and event_type == "amb_dispatched":
+            amb_id = event_data.get("amb_id")
+            call_id = event_data.get("call_id")
+            
+            if call_id in call_details:
+                call_details[call_id]["dispatched"] = True
+                call_details[call_id]["ambulance_id"] = amb_id
                 if verbose:
-                    print(f"   Est. response time: {response_time/60:.1f} min")
+                    print(f"Ambulance {amb_id} dispatched to call {call_id}")
+        
+        # Track ambulance scene arrivals
+        elif next_event and event_type == "amb_scene_arrival":
+            amb_id = event_data.get("amb_id")
+            call_id = event_data.get("call_id")
+            
+            if call_id in call_details:
+                call_details[call_id]["arrived_at_scene"] = True
+                # Also mark as dispatched in case we missed the dispatch event
+                if not call_details[call_id]["dispatched"]:
+                    call_details[call_id]["dispatched"] = True
+                    call_details[call_id]["ambulance_id"] = amb_id
+                if verbose:
+                    print(f"Ambulance {amb_id} arrived at scene for call {call_id}")
+        
+        # Track ambulance hospital arrivals - this counts as a "successful" call
+        elif next_event and event_type == "amb_hospital_arrival":
+            amb_id = event_data.get("amb_id")
+            call_id = event_data.get("call_id")
+            
+            if call_id is not None and call_id in call_details:
+                call_details[call_id]["arrived_at_hospital"] = True
+                hospital_deliveries.add(call_id)
+                if verbose:
+                    print(f"Ambulance {amb_id} delivered patient from call {call_id} to hospital")
+        
+        # Track call timeouts
+        elif next_event and event_type == "call_timeout":
+            call_id = event_data.get("call_id")
+            if call_id in call_details:
+                call_details[call_id]["timed_out"] = True
+                if verbose:
+                    print(f"Call {call_id} timed out at {format_time(event_time)}")
+        
+        # Track ambulance transfer completions (patient successfully delivered)
+        elif next_event and event_type == "amb_transfer_complete":
+            amb_id = event_data.get("amb_id")
+            call_id = event_data.get("call_id")
+            
+            if call_id is not None and call_id in call_details:
+                # Mark as successful hospital transfer
+                call_details[call_id]["transfer_complete"] = True
+                
+                # If for some reason we missed the hospital arrival event
+                if not call_details[call_id]["arrived_at_hospital"]:
+                    call_details[call_id]["arrived_at_hospital"] = True
+                    hospital_deliveries.add(call_id)
+                    
+                if verbose:
+                    print(f"Ambulance {amb_id} completed transfer for call {call_id} at hospital")
         
         # Record history for analysis
         history.append({
@@ -207,37 +246,70 @@ def evaluate_rl_model(model, env, verbose=False):
         # Update for next iteration
         obs = next_obs
         done = terminated or truncated
+        event_count += 1
     
-    # Calculate statistics
-    avg_rt = np.mean(all_response_times) if all_response_times else 0
+    # Check data frame for expected call count
+    expected_call_count = len(env.simulator.call_data)
+    if call_count != expected_call_count:
+        print(f"\nWARNING: Processed {call_count} calls but expected {expected_call_count} calls!")
+        if verbose:
+            print(f"Call IDs seen: {sorted(call_ids_seen)}")
+            # Try to show which calls were missed
+            call_ids_df = set(range(1, expected_call_count + 1))
+            missing_ids = call_ids_df - call_ids_seen
+            if missing_ids:
+                print(f"Missing call IDs: {sorted(missing_ids)}")
     
-    print("\n===== RL Model Evaluation Results =====")
-    print(f"Total reward      : {total_reward:.1f}")
-    print(f"Total calls       : {call_count}")
-    print(f"Dispatched calls  : {dispatched_calls}")
-    print(f"Missed calls      : {missed_calls}")
+    # Count successful calls (patients delivered to hospital)
+    successful_calls = len(hospital_deliveries)
+    missed_calls = call_count - successful_calls
     
-    if call_count > 0:
-        print(f"Response rate     : {dispatched_calls/call_count*100:.1f}%")
+    # Calculate detailed statistics for reporting
+    not_dispatched = sum(1 for details in call_details.values() if not details["dispatched"] and not details["timed_out"])
+    timed_out = sum(1 for details in call_details.values() if details["timed_out"])
+    dispatched_but_failed = sum(1 for call_id, details in call_details.items() 
+                               if details["dispatched"] and not call_id in hospital_deliveries)
     
-    if all_response_times:
-        print(f"Avg response time : {avg_rt:.1f}s ({avg_rt/60:.1f} min)")
-        print(f"Min response time : {min(all_response_times):.1f}s ({min(all_response_times)/60:.1f} min)")
-        print(f"Max response time : {max(all_response_times):.1f}s ({max(all_response_times)/60:.1f} min)")
-        print(f"95th percentile   : {np.percentile(all_response_times, 95):.1f}s")
+    print(f"\n===== RL Model Evaluation Results =====")
+    print(f"Total events processed: {event_count}")
+    print(f"Calls in dataset      : {expected_call_count}")
+    print(f"Calls processed       : {call_count}")
+    print(f"Successful calls      : {successful_calls} (patient delivered to hospital)")
+    print(f"Missed calls          : {missed_calls}")
+    print(f"  - Not dispatched    : {not_dispatched}")
+    print(f"  - Timed out         : {timed_out}")
+    print(f"  - Dispatch failed   : {dispatched_but_failed}")
+    
+    # Verify that our totals add up
+    total_accounted = successful_calls + not_dispatched + timed_out + dispatched_but_failed
+    if total_accounted != call_count:
+        print(f"WARNING: Call accounting mismatch! {total_accounted} accounted for vs {call_count} total")
+    
+    # Calculate final response rate
+    response_rate = (successful_calls / call_count * 100) if call_count > 0 else 0
+    print(f"Response rate         : {response_rate:.1f}%")
+    
+    if env.simulator.response_times:
+        print(f"Avg response time: {np.mean(env.simulator.response_times):.1f}s ({np.mean(env.simulator.response_times)/60:.1f} min)")
+        print(f"Min response time: {min(env.simulator.response_times):.1f}s ({min(env.simulator.response_times)/60:.1f} min)")
+        print(f"Max response time: {max(env.simulator.response_times):.1f}s ({max(env.simulator.response_times)/60:.1f} min)")
+        print(f"95th percentile  : {np.percentile(env.simulator.response_times, 95):.1f}s ({np.percentile(env.simulator.response_times, 95)/60:.1f} min)")
     else:
-        print("No response times recorded.")
+        print("No successful responses to calculate response times")
     
-    print("\nAmbulance utilization:")
-    for i in range(NUM_AMBULANCES):
-        if call_count > 0:
-            print(f"  Ambulance {i}: {amb_utilization[i]} calls ({amb_utilization[i]/call_count*100:.1f}%)")
-        else:
-            print(f"  Ambulance {i}: {amb_utilization[i]} calls")
-    
-    print("\nBusy ambulances when selected:")
-    for i in range(NUM_AMBULANCES):
-        print(f"  Ambulance {i}: busy {amb_busy_when_selected[i]} times")
+    # Add diagnostic information about call status
+    if verbose:
+        print("\nDetailed call status:")
+        failed_calls = []
+        for call_id, details in call_details.items():
+            if details["dispatched"] and not details.get("arrived_at_hospital", False):
+                failed_calls.append(call_id)
+                print(f"Call {call_id}: Dispatched but failed to reach hospital")
+                print(f"  - Details: {details}")
+        
+        if failed_calls:
+            print(f"\nFailed calls: {sorted(failed_calls)}")
+            print(f"Total failed dispatched calls: {len(failed_calls)}")
     
     # Save history to CSV
     history_df = pd.DataFrame(history)
@@ -250,13 +322,11 @@ def evaluate_rl_model(model, env, verbose=False):
         "method": "RL Model",
         "reward": total_reward,
         "calls": call_count,
-        "dispatched": dispatched_calls,
+        "dispatched": successful_calls,  # Only count successful deliveries
         "missed": missed_calls,
-        "response_rate": dispatched_calls/call_count*100 if call_count > 0 else 0,
-        "avg_response_time": avg_rt,
-        "p95_response_time": np.percentile(all_response_times, 95) if all_response_times else 0,
-        "utilization": amb_utilization,
-        "busy_when_selected": amb_busy_when_selected
+        "response_rate": response_rate,
+        "avg_response_time": np.mean(env.simulator.response_times) if env.simulator.response_times else 0,
+        "p95_response_time": np.percentile(env.simulator.response_times, 95) if env.simulator.response_times else 0,
     }
 
 def run_baseline_simulator(G, calls_df, path_cache, node_to_idx, idx_to_node, verbose=False):

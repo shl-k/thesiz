@@ -84,8 +84,6 @@ def generate_graph(bbox=PRINCETON_BBOX, network_type='drive'):
         pickle.dump(G, f)
     return G
     
-
-
 def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FILE, num_days=7):
     """
     Generate synthetic demand based on historical spatial and temporal distributions
@@ -125,8 +123,7 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
     historical_lons = medical_trips['origin_lon'].values
     
     # Fit a Kernel Density Estimator to historical locations
-    # Using a much larger bandwidth to spread out the demand more
-    kde = KernelDensity(bandwidth=0.005, kernel='gaussian')  # 5x larger bandwidth
+    kde = KernelDensity(bandwidth=0.005, kernel='gaussian')  
     historical_coords = np.column_stack([historical_lats, historical_lons])
     kde.fit(historical_coords)
     

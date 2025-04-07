@@ -34,7 +34,7 @@ TOTAL_TIMESTEPS = 1000000
 SAVE_FREQ = 0  # How often to save checkpoints (set to 0 to disable)
 LOG_DIR = Path("logs/simple_dispatch")
 MODEL_DIR = Path("models")
-MODEL_NAME = "simple_dispatch_7_1M_v3"
+MODEL_NAME = "simple_dispatch_7_1M_v5"
 
 # Data paths
 GRAPH_FILE = "data/processed/princeton_graph.gpickle"
@@ -42,7 +42,8 @@ CALLS_FILE = "data/processed/synthetic_calls.csv"
 PATH_CACHE_FILE = "data/matrices/path_cache.pkl"
 NODE_TO_IDX_FILE = "data/matrices/node_id_to_idx.json"
 IDX_TO_NODE_FILE = "data/matrices/idx_to_node_id.json"
-LAT_LON_FILE = "data/matrices/lat_lon_mapping.json"
+NODE_TO_LAT_LON_FILE = "data/matrices/node_to_lat_lon.json"
+LAT_LON_TO_NODE_FILE = "data/matrices/lat_lon_to_node.json"
 
 def load_real_data():
     """Load the real Princeton data instead of test data."""
@@ -106,7 +107,7 @@ def create_env():
     # Create the environment
     env = SimpleDispatchEnv(
         simulator=simulator,
-        lat_lon_file=LAT_LON_FILE,
+        lat_lon_file=NODE_TO_LAT_LON_FILE,
         verbose=False,
         max_steps=1000000,  # Set to 1 million to never cut off episodes
         negative_reward_no_dispatch=-1000
@@ -134,11 +135,11 @@ def main():
         vec_env,
         verbose=1,
         tensorboard_log=str(LOG_DIR),
-        learning_rate=1e-4,
+        learning_rate=3e-4,
         n_steps=2048,
-        batch_size=128,
-        gamma=0.995,
-        ent_coef=0.01,
+        batch_size=256,
+        gamma=0.98,
+        ent_coef=0.02,
         clip_range=0.2
     )
     
@@ -179,11 +180,11 @@ def main():
     training_info = {
         # Model hyperparameters
         "hyperparameters": {
-            "learning_rate": 1e-4,
+            "learning_rate": 3e-4,
             "n_steps": 2048,
-            "batch_size": 128,
-            "gamma": 0.995,
-            "ent_coef": 0.01,
+            "batch_size": 256,
+            "gamma": 0.98,
+            "ent_coef": 0.02,
             "clip_range": 0.2,
             "max_steps": 1000000,
             "negative_reward_no_dispatch": -1000,
@@ -198,7 +199,8 @@ def main():
             "path_cache_file": PATH_CACHE_FILE,
             "node_to_idx_file": NODE_TO_IDX_FILE,
             "idx_to_node_file": IDX_TO_NODE_FILE,
-            "lat_lon_file": LAT_LON_FILE,
+            "node_to_lat_lon_file": NODE_TO_LAT_LON_FILE,
+            "lat_lon_to_node_file": LAT_LON_TO_NODE_FILE,
             "calls_file_md5": calls_file_hash
         },
         

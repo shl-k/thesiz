@@ -15,6 +15,7 @@ from stable_baselines3 import SAC
 from typing import Dict, List, Optional
 from datetime import datetime
 import argparse
+import json
 
 # Add the project root to the Python path
 project_root = str(Path(__file__).parent.parent)
@@ -36,7 +37,8 @@ CALLS_FILE = "data/processed/synthetic_test_calls.csv"
 PATH_CACHE_FILE = "data/matrices/path_cache.pkl"
 NODE_TO_IDX_FILE = "data/matrices/node_id_to_idx.json"
 IDX_TO_NODE_FILE = "data/matrices/idx_to_node_id.json"
-LAT_LON_FILE = "data/matrices/lat_lon_mapping.json"
+LAT_LON_TO_NODE_FILE = "data/matrices/lat_lon_to_node.json"
+NODE_TO_LAT_LON_FILE = "data/matrices/node_to_lat_lon.json"
 
 def load_data():
     """Load the test data."""
@@ -66,25 +68,22 @@ def load_data():
         idx_to_node = {int(k): int(v) for k, v in idx_to_node.items()}
         
     # Load lat/lon mapping
-    with open(LAT_LON_FILE, 'r') as f:
-        lat_lon_mapping = json.load(f)
-        # Convert string keys to integers
-        lat_lon_mapping = {int(k): v for k, v in lat_lon_mapping.items()}
+    with open(NODE_TO_LAT_LON_FILE, 'r') as f:
+        node_to_lat_lon = json.load(f)
+        # Convert string keys to tuples
+        node_to_lat_lon = {tuple(map(float, k.strip('()').split(','))): v for k, v in node_to_lat_lon.items()}
     
-    return G, calls, path_cache, node_to_idx, idx_to_node, lat_lon_mapping
+    return G, calls, path_cache, node_to_idx, idx_to_node, node_to_lat_lon
 
 class RLRelocationPolicy:
     """
     Custom relocation policy that uses a trained RL model to make relocation decisions.
     """
-    def __init__(self, model, lat_lon_mapping):
+    def __init__(self, model, lat_lon_to_node, node_to_lat_lon, path_cache):
         self.model = model
-        self.lat_lon_mapping = lat_lon_mapping
-        self.node_coords = {int(k): tuple(v) for k, v in lat_lon_mapping.items()}
-        
-        # Create numpy array of all node coordinates for fast nearest neighbor calculations
-        self.node_ids = list(self.node_coords.keys())
-        self.node_coords_array = np.array([self.node_coords[node] for node in self.node_ids])
+        self.lat_lon_to_node = lat_lon_to_node  # Store the lat/lon to node mapping
+        self.node_to_lat_lon = node_to_lat_lon  # Store the node to lat/lon mapping
+        self.path_cache = path_cache
         
         # For tracking when we last made a relocation decision
         self.last_relocate_time = 0
@@ -95,11 +94,37 @@ class RLRelocationPolicy:
         self.relocation_destinations = []
         
     def get_nearest_node(self, lat, lon):
-        """Find the nearest node to the given coordinates."""
-        query_point = np.array([lat, lon])
-        distances = np.sqrt(np.sum((self.node_coords_array - query_point)**2, axis=1))
-        nearest_idx = np.argmin(distances)
-        return self.node_ids[nearest_idx]
+        """Find the nearest node to the given coordinates using path cache."""
+        # Convert lat/lon to node ID using existing mapping
+        rounded_lat, rounded_lon = round(lat, 6), round(lon, 6)
+        if (rounded_lat, rounded_lon) in self.lat_lon_to_node:
+            return self.lat_lon_to_node[(rounded_lat, rounded_lon)]
+        
+        # If exact coordinates not found, find the nearest node using coordinates
+        # First get coordinates for all nodes
+        node_distances = []
+        for node_id, (node_lat, node_lon) in self.node_to_lat_lon.items():
+            # Calculate straight-line distance
+            dist = ((node_lat - lat) ** 2 + (node_lon - lon) ** 2) ** 0.5
+            node_distances.append((node_id, dist))
+        
+        # Sort by distance and take top 10 nodes
+        node_distances.sort(key=lambda x: x[1])
+        nearest_nodes = [node_id for node_id, _ in node_distances[:10]]
+        
+        # Among these nodes, find the one with minimum travel time from PFARS
+        base_node = 241  # PFARS location
+        min_travel_time = float('inf')
+        nearest_node = None
+        
+        for node_id in nearest_nodes:
+            if node_id in self.path_cache[base_node]:
+                travel_time = self.path_cache[base_node][node_id]['travel_time']
+                if travel_time < min_travel_time:
+                    min_travel_time = travel_time
+                    nearest_node = node_id
+        
+        return nearest_node if nearest_node is not None else 241  # Fallback to base
     
     def _build_observation(self, all_ambulances, completed_ambulance, current_time):
         """Build the observation for the model."""
@@ -107,8 +132,8 @@ class RLRelocationPolicy:
         ambulances_obs = []
         for amb in all_ambulances:
             # Get coordinates
-            if amb.location in self.node_coords:
-                lat, lon = self.node_coords[amb.location]
+            if amb.location in self.node_to_lat_lon:
+                lat, lon = self.node_to_lat_lon[amb.location]
             else:
                 lat, lon = 0.0, 0.0
                 
@@ -123,8 +148,8 @@ class RLRelocationPolicy:
             ambulances_obs.append([lat, lon, status_value, busy_time])
             
         # Completed ambulance
-        if completed_ambulance.location in self.node_coords:
-            lat, lon = self.node_coords[completed_ambulance.location]
+        if completed_ambulance.location in self.node_to_lat_lon:
+            lat, lon = self.node_to_lat_lon[completed_ambulance.location]
         else:
             lat, lon = 0.0, 0.0
             
@@ -230,7 +255,13 @@ def run_evaluation(model_path, num_episodes=5, visualize=True, verbose=True):
     FIGURE_DIR.mkdir(parents=True, exist_ok=True)
     
     # Load data
-    G, calls, path_cache, node_to_idx, idx_to_node, lat_lon_mapping = load_data()
+    G, calls, path_cache, node_to_idx, idx_to_node, node_to_lat_lon = load_data()
+    
+    # Load lat/lon to node mapping
+    with open(LAT_LON_TO_NODE_FILE, 'r') as f:
+        lat_lon_to_node = json.load(f)
+        # Convert string keys to tuples
+        lat_lon_to_node = {tuple(map(float, k.strip('()').split(','))): v for k, v in lat_lon_to_node.items()}
     
     # Load the trained model
     model = SAC.load(model_path)
@@ -240,7 +271,7 @@ def run_evaluation(model_path, num_episodes=5, visualize=True, verbose=True):
     hospital_node = 1293  # Princeton hospital location
     
     # Create the custom RL relocation policy
-    rl_relocation_policy = RLRelocationPolicy(model, lat_lon_mapping)
+    rl_relocation_policy = RLRelocationPolicy(model, lat_lon_to_node, node_to_lat_lon, path_cache)
     
     # Statistics to collect
     all_episode_stats = []

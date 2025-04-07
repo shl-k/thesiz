@@ -45,10 +45,11 @@ class SimpleRelocationEnv(gym.Env):
     def __init__(
         self,
         simulator: AmbulanceSimulator,
-        lat_lon_file: str = 'data/matrices/lat_lon_mapping.json',
-        closest_n_nodes: int = 10,  # Number of closest nodes to consider for relocation
+        node_to_lat_lon_file: str = 'data/matrices/node_to_lat_lon.json',
+        lat_lon_to_node_file: str = 'data/matrices/lat_lon_to_node.json',
+        closest_n_nodes: int = 100,  # Number of closest nodes to consider for relocation
         verbose: bool = False,
-        max_steps: int = 1000,
+        max_steps: int = 1000000,
         reward_scale: float = 1.0,
         render_mode: Optional[str] = None,
     ):
@@ -57,7 +58,7 @@ class SimpleRelocationEnv(gym.Env):
         
         Args:
             simulator: The ambulance simulator
-            lat_lon_file: Path to JSON file with lat/lon mapping
+            node_to_lat_lon_file: Path to JSON file with node to lat/lon mapping
             closest_n_nodes: Number of closest nodes to consider for relocation
             verbose: Whether to print verbose output
             max_steps: Maximum number of steps per episode
@@ -72,27 +73,31 @@ class SimpleRelocationEnv(gym.Env):
         self.closest_n_nodes = closest_n_nodes
         
         # Load node coordinates from file
-        if os.path.exists(lat_lon_file):
+        if os.path.exists(node_to_lat_lon_file):
             if verbose:
-                print(f"Loading node coordinates from {lat_lon_file}")
-            with open(lat_lon_file, 'r') as f:
+                print(f"Loading node coordinates from {node_to_lat_lon_file}")
+            with open(node_to_lat_lon_file, 'r') as f:
                 raw_coords = json.load(f)
                 # Convert string keys to integers
                 self.node_coords = {int(k): tuple(v) for k, v in raw_coords.items()}
             if verbose:
                 print(f"Loaded coordinates for {len(self.node_coords)} nodes")
                 
-            # Create reverse mapping from lat/lon to node ID
-            self.latlon_to_node = {}
-            for node_id, (lat, lon) in self.node_coords.items():
-                # Round to reduce floating point issues
-                self.latlon_to_node[(round(lat, 6), round(lon, 6))] = node_id
+        # Load reverse mapping from lat/lon to node ID
+        if os.path.exists(lat_lon_to_node_file):
+            if verbose:
+                print(f"Loading lat/lon mapping from {lat_lon_to_node_file}")
+            with open(lat_lon_to_node_file, 'r') as f:
+                self.latlon_to_node = json.load(f)
         else:
-            raise FileNotFoundError(f"Lat/lon mapping file {lat_lon_file} not found")
-        
+            raise FileNotFoundError(f"Lat/lon to node mapping file {lat_lon_to_node_file} not found")
+                
         # Create numpy array of all node coordinates for fast nearest neighbor calculations
         self.node_ids = list(self.node_coords.keys())
         self.node_coords_array = np.array([self.node_coords[node] for node in self.node_ids])
+        
+        # Get path cache from simulator
+        self.path_cache = simulator.path_cache
         
         # State tracking
         self.completed_ambulance = None
@@ -107,13 +112,13 @@ class SimpleRelocationEnv(gym.Env):
             'ambulances': spaces.Box(
                 low=0, 
                 high=np.inf, 
-                shape=(self.num_ambulances, 4),  # pos_x, pos_y, status, busy_until
+                shape=(self.num_ambulances, 4),  # lat, lon, status, busy_until
                 dtype=np.float32
             ),
             'completed_ambulance': spaces.Box(
                 low=0, 
                 high=np.inf, 
-                shape=(3,),  # pos_x, pos_y, id
+                shape=(3,),  # lat, lon, id
                 dtype=np.float32
             ),
             'time_of_day': spaces.Box(
@@ -138,7 +143,7 @@ class SimpleRelocationEnv(gym.Env):
     
     def get_nearest_node(self, lat, lon):
         """
-        Find the nearest node to the given lat/lon coordinates.
+        Find the nearest node to the given lat/lon coordinates using path cache.
         
         Args:
             lat: Latitude
@@ -152,11 +157,31 @@ class SimpleRelocationEnv(gym.Env):
         if (rounded_lat, rounded_lon) in self.latlon_to_node:
             return self.latlon_to_node[(rounded_lat, rounded_lon)]
         
-        # Otherwise, find the nearest node by Euclidean distance
-        query_point = np.array([lat, lon])
-        distances = np.sqrt(np.sum((self.node_coords_array - query_point)**2, axis=1))
-        nearest_idx = np.argmin(distances)
-        return self.node_ids[nearest_idx]
+        # If exact coordinates not found, find the nearest node using coordinates
+        # First get coordinates for all nodes
+        node_distances = []
+        for node_id, (node_lat, node_lon) in self.node_coords.items():
+            # Calculate straight-line distance
+            dist = ((node_lat - lat) ** 2 + (node_lon - lon) ** 2) ** 0.5
+            node_distances.append((node_id, dist))
+        
+        # Sort by distance and take top 10 nodes
+        node_distances.sort(key=lambda x: x[1])
+        nearest_nodes = [node_id for node_id, _ in node_distances[:10]]
+        
+        # Among these nodes, find the one with minimum travel time from PFARS
+        base_node = 241  # PFARS location
+        min_travel_time = float('inf')
+        nearest_node = None
+        
+        for node_id in nearest_nodes:
+            if node_id in self.path_cache[base_node]:
+                travel_time = self.path_cache[base_node][node_id]['travel_time']
+                if travel_time < min_travel_time:
+                    min_travel_time = travel_time
+                    nearest_node = node_id
+        
+        return nearest_node if nearest_node is not None else 241  # Fallback to base
     
     def reset(self, seed=None, options=None):
         """
@@ -204,7 +229,7 @@ class SimpleRelocationEnv(gym.Env):
         ambulance = self.simulator.ambulances[amb_idx]
         
         # Calculate reward before relocation (for comparison)
-        pre_relocation_coverage = self._calculate_coverage()
+        pre_relocation_response_time = self._calculate_average_response_time(ambulance.location)
         
         # Perform relocation
         ambulance.relocate(target_node, self.simulator.current_time)
@@ -239,8 +264,25 @@ class SimpleRelocationEnv(gym.Env):
                     }
                     
                     # Calculate reward after relocation
-                    post_relocation_coverage = self._calculate_coverage()
-                    reward = (post_relocation_coverage - pre_relocation_coverage) * self.reward_scale
+                    post_relocation_response_time = self._calculate_average_response_time(target_node)
+                    
+                    # Base reward for successful relocation
+                    reward = 100
+                    
+                    # Response time improvement reward
+                    response_time_improvement = pre_relocation_response_time - post_relocation_response_time
+                    reward += response_time_improvement * 0.5  # Scale factor to balance with other rewards
+                    
+                    # Coverage reward based on distance to other ambulances
+                    coverage_reward = self._calculate_coverage_reward(target_node)
+                    reward += coverage_reward
+                    
+                    if self.verbose:
+                        print(f"Relocation reward breakdown:")
+                        print(f"  Base reward: +100")
+                        print(f"  Response time improvement: +{response_time_improvement * 0.5:.1f}")
+                        print(f"  Coverage reward: +{coverage_reward:.1f}")
+                        print(f"  Total: {reward:.1f}")
                     
                     # Increment step counter
                     self.steps += 1
@@ -278,36 +320,69 @@ class SimpleRelocationEnv(gym.Env):
                 
             print("\n")
     
-    def _calculate_coverage(self):
+    def _calculate_average_response_time(self, location):
         """
-        Calculate a coverage metric based on ambulance distribution.
-        Higher coverage is better.
+        Calculate average response time from a location to all active calls.
         
+        Args:
+            location: Node ID to calculate response time from
+            
         Returns:
-            float: Coverage score
+            float: Average response time in seconds
         """
-        # Simple coverage metric: Sum of distances between ambulances
-        # This encourages ambulances to spread out
-        coverage = 0.0
-        ambulance_positions = []
+        total_time = 0
+        num_calls = len(self.simulator.active_calls)
         
+        if num_calls == 0:
+            return 0
+            
+        for call in self.simulator.active_calls.values():
+            call_node = call["origin_node"]
+            if call_node in self.path_cache[location]:
+                travel_time = self.path_cache[location][call_node]['travel_time']
+                total_time += travel_time
+                
+        return total_time / num_calls if num_calls > 0 else 0
+        
+    def _calculate_coverage_reward(self, location):
+        """
+        Calculate coverage reward based on positioning relative to other ambulances
+        and active calls.
+        
+        Args:
+            location: Node ID to calculate coverage for
+            
+        Returns:
+            float: Coverage reward
+        """
+        reward = 0.0
+        
+        # Get coordinates of the location
+        if location not in self.node_coords:
+            return 0.0
+            
+        loc_coords = np.array(self.get_node_coords(location))
+        
+        # Calculate distances to other ambulances
         for amb in self.simulator.ambulances:
-            if amb.location in self.node_coords:
-                ambulance_positions.append(np.array(self.get_node_coords(amb.location)))
-            
-        # Calculate sum of pairwise distances
-        if len(ambulance_positions) > 1:
-            for i in range(len(ambulance_positions)):
-                for j in range(i+1, len(ambulance_positions)):
-                    distance = np.sqrt(np.sum((ambulance_positions[i] - ambulance_positions[j])**2))
-                    coverage += distance
+            if amb.location in self.node_coords and amb.location != location:
+                amb_coords = np.array(self.get_node_coords(amb.location))
+                distance = np.sqrt(np.sum((loc_coords - amb_coords)**2))
+                # Reward for being not too close and not too far from other ambulances
+                if 1000 < distance < 5000:  # 1-5km range
+                    reward += 50
                     
-        # Normalize by the number of pairs
-        n_pairs = len(ambulance_positions) * (len(ambulance_positions) - 1) / 2
-        if n_pairs > 0:
-            coverage /= n_pairs
-            
-        return coverage
+        # Calculate distances to active calls
+        for call in self.simulator.active_calls.values():
+            call_node = call["origin_node"]
+            if call_node in self.node_coords:
+                call_coords = np.array(self.get_node_coords(call_node))
+                distance = np.sqrt(np.sum((loc_coords - call_coords)**2))
+                # Reward for being close to calls
+                if distance < 3000:  # Within 3km
+                    reward += 100 * (1 - distance/3000)  # Linear scaling
+                    
+        return reward
     
     def _build_observation(self):
         """

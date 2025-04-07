@@ -24,9 +24,12 @@ class NearestDispatchPolicy:
             weight="travel_time"
         )
 
-    def select_ambulance(self, call_node: int, available_ambulances: List[Dict], all_ambulances: List[Dict] = None, current_time: float = None) -> Optional[int]:
-        if not available_ambulances:
+    def select_ambulance(self, available_ambulances: List[Dict], all_ambulances: List[Dict] = None, current_time: float = None, current_call: Dict = None) -> Optional[int]:
+        """Select the nearest available ambulance to the current call."""
+        if not available_ambulances or not current_call:
             return None
+            
+        call_node = current_call["origin_node"]
         return min(
             available_ambulances,
             key=lambda amb: self._travel_time(amb["location"], call_node)
@@ -73,7 +76,7 @@ class RLDispatchPolicy:
         self.last_action_was_no_dispatch = False  # Track when the policy chooses not to dispatch
         
         # Load lat/lon mapping directly
-        with open("data/matrices/lat_lon_mapping.json", "r") as f:
+        with open("data/matrices/node_to_lat_lon.json", "r") as f:
             self.lat_lon_mapping = {int(k): v for k, v in json.load(f).items()}
 
     def _build_observation(self, all_ambulances, current_time: float, current_call: Dict = None) -> dict:
@@ -182,4 +185,4 @@ class RLDispatchPolicy:
         if not current_call:
             return None
         call_node = current_call["origin_node"]
-        return self.fallback.select_ambulance(call_node, available_ambulances)
+        return self.fallback.select_ambulance(available_ambulances, None, None, current_call)
