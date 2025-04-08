@@ -51,7 +51,6 @@ class SimpleDispatchEnv(gym.Env):
         lat_lon_file: str = 'data/matrices/node_to_lat_lon.json',
         verbose: bool = False,
         max_steps: int = 1000000,
-        negative_reward_no_dispatch: float = -1000,
         render_mode: Optional[str] = None,
     ):
         """
@@ -62,13 +61,11 @@ class SimpleDispatchEnv(gym.Env):
             lat_lon_file: Path to JSON file with node_id -> [lat, lon] mapping
             verbose: Whether to print verbose output
             max_steps: Maximum number of steps per episode
-            negative_reward_no_dispatch: Reward for not dispatching an ambulance
             render_mode: How to render the environment (currently only 'human' is supported)
         """
         self.simulator = simulator
         self.verbose = verbose
         self.max_steps = max_steps
-        self.negative_reward_no_dispatch = negative_reward_no_dispatch
         self.render_mode = render_mode
         
         # Set simulator to manual mode - disable automatic dispatch
@@ -147,124 +144,80 @@ class SimpleDispatchEnv(gym.Env):
         return obs, {}
     
     def step(self, action):
-        """
-        Take a step in the environment.
-        
-        Args:
-            action: Which ambulance to dispatch:
-                   0 to num_ambulances-1: ambulance index to dispatch
-                   num_ambulances: no dispatch
-            
-        Returns:
-            observation, reward, terminated, truncated, info
-        """
-        # Initialize reward
         reward = 0.0
-        
-        # Check if action is "no dispatch" (num_ambulances) or a valid ambulance index
         dispatch_action = None if action == self.num_ambulances else action
-        
-        # Process simulator steps until we get to a call arrival or are done
+
         while True:
-            # Check if we're done
             if self.done or self.steps >= self.max_steps:
                 self.done = True
                 return self._build_observation(), reward, True, False, {}
-            
-            # Process next event in simulator
+
             event_time, event_type, event_data = self.simulator.step()
-            
-            # Check if simulation is done
+
             if event_type is None:
                 self.done = True
                 return self._build_observation(), reward, True, False, {}
-            
-            # Handle call arrival
+
             if event_type == EventType.CALL_ARRIVAL:
-                # Set current call
                 call_id = event_data["call_id"]
                 self.current_call = self.simulator.active_calls[call_id]
-                
-                # Handle dispatch action
+
                 if dispatch_action is not None:
-                    # Get the ambulance
                     ambulance = self.simulator.ambulances[dispatch_action]
-                    
-                    # Check if ambulance is available
                     if ambulance.is_available():
-                        # Get call information
                         call_node = self.current_call["origin_node"]
-                        
-                        # Calculate travel time (for reward)
                         travel_time = self.simulator.path_cache[ambulance.location][call_node]['travel_time']
-                        
-                        # Manually dispatch the ambulance
+                        travel_time_minutes = travel_time / 60
                         dispatch_success = self._dispatch_ambulance(self.current_call, dispatch_action)
-                        
                         if dispatch_success:
-                            # Reward is negative travel time scaled by call priority, but less severe
-                            call_priority = self.current_call.get("intensity", 1.0)  # Default priority is 1.0
-                            # Scale travel time penalty by 0.5 to reduce its impact
-                            travel_time_penalty = travel_time * call_priority * 0.5
-                            # Add time-based bonus: exponentially higher rewards for faster response
-                            time_bonus = 500 * np.exp(-travel_time / 600)  # 600s (10 min) as reference time
-                            reward -= travel_time_penalty
-                            reward += 500  # Increased base reward for dispatch (was 100)
-                            reward += time_bonus
+                            reward += 15
+                            reward -= travel_time_minutes
                             if self.verbose:
                                 print(f"Dispatch reward breakdown:")
-                                print(f"  Base reward: +500")
-                                print(f"  Travel time penalty: -{travel_time_penalty:.1f}")
-                                print(f"  Time bonus: +{time_bonus:.1f}")
-                                print(f"  Total: {500 - travel_time_penalty + time_bonus:.1f}")
+                                print(f"  Base reward for dispatching: +15")
+                                print(f"  Travel time penalty: -{travel_time_minutes:.1f}")
                         else:
-                            # Penalty for failed dispatch - scaled by priority but not as harsh
-                            call_priority = self.current_call.get("intensity", 1.0)
-                            reward -= 300 * call_priority  # Reduced from 500 to 300
+                            reward -= 15
                             if self.verbose:
-                                print(f"Failed dispatch penalty: -300 * {call_priority:.2f} = {-300 * call_priority:.1f}")
+                                print(f"Failed dispatch penalty: -15")
                     else:
-                        # Penalty for trying to dispatch unavailable ambulance - same as failed dispatch
-                        call_priority = self.current_call.get("intensity", 1.0)
-                        reward -= 300 * call_priority  # Reduced from 500 to 300
+                        reward -= 15
                         if self.verbose:
-                            print(f"Unavailable ambulance penalty: -300 * {call_priority:.2f} = {-300 * call_priority:.1f}")
+                            print(f"Unavailable ambulance penalty: -15")
                 else:
-                    # No ambulance dispatched - strong penalty to discourage this behavior
-                    reward -= 800  # Reduced from 1000 to 800
+                    reward -= 30
                     if self.verbose:
-                        print(f"No dispatch penalty: -800")
-                
-                # Increment step counter
+                        print(f"No dispatch penalty: -30")
+
                 self.steps += 1
-                
-                # Return updated observation
+
+                # Continue simulator until next call or pause point (logging)
+                while True:
+                    ev = self.simulator.step()
+                    if ev is None or ev[1] == EventType.CALL_ARRIVAL:
+                        break
+
+                    if ev[1] == EventType.CALL_TIMEOUT:
+                        reward -= 30
+                        if self.verbose:
+                            call_id = ev[2].get("call_id", "unknown")
+                            print(f"Call {call_id} timed out: -30")
+                    elif ev[1] == EventType.AMB_SCENE_ARRIVAL:
+                        if ev[2].get("call_id") == self.current_call["call_id"]:
+                            reward += 15
+                            if self.verbose:
+                                print(f"Scene arrival reward: +15")
+                            self.current_call["waiting_for_hospital"] = True
+                    elif ev[1] == EventType.AMB_HOSPITAL_ARRIVAL:
+                        if ev[2].get("call_id") == self.current_call.get("call_id"):
+                            reward += 30
+                            if self.verbose:
+                                print(f"Hospital arrival reward: +30")
+
+                # ✅ Only return after all events processed
                 return self._build_observation(), reward, False, False, {}
-            
-            # For call timeouts, just continue processing events
-            # The simulator will handle removing the call from active_calls
-            elif event_type == EventType.CALL_TIMEOUT:
-                if self.verbose:
-                    call_id = event_data.get("call_id", "unknown")
-                    print(f"Call {call_id} timed out, continuing to next event")
-                continue
-            
-            # Handle ambulance scene arrival
-            elif event_type == EventType.AMB_SCENE_ARRIVAL:
-                call_id = event_data.get("call_id")
-                if call_id == self.current_call["call_id"]:
-                    # Track this call for potential hospital arrival reward
-                    self.current_call["waiting_for_hospital"] = True
-            
-            # Handle hospital arrival - this is a successful delivery
-            elif event_type == EventType.AMB_HOSPITAL_ARRIVAL:
-                call_id = event_data.get("call_id")
-                if call_id == self.current_call.get("call_id"):
-                    # Large positive reward for successful delivery
-                    reward += 5000  # Increased from 3000 to 5000
-                    if self.verbose:
-                        print(f"Successful delivery to hospital for call {call_id}: +5000")
-            # We don't need to handle other event types as the simulator will process them
+
+
     
     def render(self):
         """Render the current state of the environment."""

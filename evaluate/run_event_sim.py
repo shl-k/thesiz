@@ -11,10 +11,10 @@ import pickle
 import json
 import pandas as pd
 
-# Add parent directory to path for imports
+# Add project root directory to path for imports
 current_dir = os.path.dirname(os.path.abspath(__file__))
-parent_dir = os.path.dirname(os.path.dirname(current_dir))  # Project root
-sys.path.append(parent_dir)
+project_root = os.path.abspath(os.path.join(current_dir, ".."))
+sys.path.append(project_root)
 
 # Import simulator and policies
 from src.simulator.simulator import AmbulanceSimulator
@@ -40,6 +40,8 @@ def main():
     # Set up simulation parameters
     call_data_path = 'data/processed/synthetic_calls.csv'
     call_data = pd.read_csv(call_data_path)
+    print("Calls loaded:", len(call_data), 
+          "| max day:", call_data.day.max())
     
     num_ambulances = 2
     pfars_node = 241  # PFARS HQ node
@@ -82,9 +84,10 @@ def main():
     
     # Print final statistics
     print("\n===== Final Statistics =====")
-    print(f"Total calls: {simulator.calls_responded + simulator.missed_calls}")
+    print(f"Total calls: {simulator.total_calls}")
     print(f"Calls responded: {simulator.calls_responded}")
     print(f"Missed calls: {simulator.missed_calls}")
+    print(f"Timed out calls: {simulator.timed_out_calls}")
     
     if simulator.response_times:
         avg_rt = sum(simulator.response_times) / len(simulator.response_times)

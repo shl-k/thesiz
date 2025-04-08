@@ -98,12 +98,6 @@ class AmbulanceSimulator:
         self.idx_to_node = idx_to_node
         self.manual_mode = manual_mode
         
-        if self.verbose:
-            print(f"Initializing simulator with {num_ambulances} ambulances")
-            print(f'Base location: {base_location}')
-            print(f'Hospital location: {hospital_node}')
-            print(f"Number of nodes in graph: {len(graph.nodes)}")
-        
         # Initialize attributes
         self.current_time = 0
         self.ambulances = []
@@ -116,13 +110,14 @@ class AmbulanceSimulator:
         self.ambulance_events = {i: [] for i in range(num_ambulances)}
         
         # Statistics
-        self.calls_responded = 0  # Only increment when patient reaches hospital
+        self.calls_responded = 0  # Number of patients delivered to hospital
         self.response_times = []
         self.call_response_times = {}  # call_id -> response time
-        self.missed_calls = 0
-        self.timed_out_calls = 0
+        self.call_total_times = {}  # call_id -> total time from call to drop-off
+        self.missed_calls = 0  # Calls missed initially but not timed out
+        self.timed_out_calls = 0  # Calls that timed out
         self.total_calls = len(call_data)  # Total number of calls in the dataset
-        self.calls_seen = 0  # Track total number of calls seen
+        self.calls_seen = 0  # Total number of calls seen (should equal total_calls)
         
         # Active calls and their timeout events
         self.active_calls = {}  # call_id -> call_data
@@ -281,7 +276,7 @@ class AmbulanceSimulator:
         # Process the event based on its type
         if event_type == EventType.CALL_ARRIVAL:
             if self.verbose:
-                print(f"📞 Call arrival at t={event_time:.1f}")
+                print(f"📞 Call arrival at {self.format_time(event_time)}")
                 
             # Check if a relocation target is specified in the event data
             relocation_target = data.get("relocation_target", None)
@@ -289,90 +284,70 @@ class AmbulanceSimulator:
 
         elif event_type == EventType.CALL_TIMEOUT:
             if self.verbose:
-                print(f"👺 Call timeout at t={event_time:.1f}")
+                print(f"👺 Call timeout at {self.format_time(event_time)}")
             self._handle_call_timeout(data)
 
         elif event_type == EventType.AMB_SCENE_ARRIVAL:
             if self.verbose:
-                print(f"🚑 Ambulance scene arrival at t={event_time:.1f}")
+                print(f"🚑 Ambulance scene arrival at {self.format_time(event_time)}")
             self._handle_ambulance_scene_arrival(data)
 
         elif event_type == EventType.AMB_SERVICE_COMPLETE:
             if self.verbose:
-                print(f"🚑  Service complete at t={event_time:.1f}")
+                print(f"🚑 Service complete at {self.format_time(event_time)}")
             self._handle_ambulance_service_complete(data)
 
         elif event_type == EventType.AMB_HOSPITAL_ARRIVAL:
             if self.verbose:
-                print(f"🏥 Hospital arrival at t={event_time:.1f}")
+                print(f"🏥 Hospital arrival at {self.format_time(event_time)}")
             self._handle_ambulance_hospital_arrival(data)
 
         elif event_type == EventType.AMB_TRANSFER_COMPLETE:
             if self.verbose:
-                print(f"🏥 Transfer complete at t={event_time:.1f}")
+                print(f"🏥 Transfer complete at {self.format_time(event_time)}")
             self._handle_ambulance_transfer_complete(data)
 
         elif event_type == EventType.AMB_RELOCATION_COMPLETE:
             if self.verbose:
-                print(f"🧮 Relocation complete at t={event_time:.1f}")
+                print(f"🧮 Relocation complete at {self.format_time(event_time)}")
             self._handle_ambulance_relocation_complete(data)
 
         return event_time, event_type, data
     
     def _handle_call_arrival(self, call: Dict, relocation_target: int = None):
         """Process a new emergency call arrival."""
-        # Call ID should already be present from the data
         call_id = call["call_id"]
-        
-        # Track total calls seen
         self.calls_seen += 1
         
-        # Add call to active calls
-        self.active_calls[call_id] = call
-        
-        # Calculate timeout for this call
-        timeout_duration = max(60, np.random.normal(self.call_timeout_mean, self.call_timeout_std))
-        timeout_time = self.current_time + timeout_duration
-        
-        # Create timeout event with relocation target if specified
-        timeout_data = {"call_id": call_id}
-        if relocation_target is not None:
-            timeout_data["relocation_target"] = relocation_target
-            
-        # Schedule timeout event
-        timeout_event_id = self._push_event(
-            timeout_time, 
-            EventType.CALL_TIMEOUT, 
-            timeout_data
-        )
-        
-        # Store timeout event id for potential cancellation
-        self.call_timeouts[call_id] = (timeout_time, timeout_event_id)
-        
         if self.verbose:
-            print(f"\nCall arrival at {self.format_time(self.current_time)}:")
-            print(f"  Call ID: {call_id}")
-            print(f"  Origin: {call['origin_node']}")
-            print(f"  Timeout duration: {timeout_duration:.1f} seconds ({timeout_duration/60:.1f} minutes)")
+            print(f"\n📞 Processing call {call_id} at {self.format_time(self.current_time)}")
+            print(f"  Total calls seen: {self.calls_seen}/{self.total_calls}")
+        
+        # Add call to active calls immediately
+        self.active_calls[call_id] = call
         
         # Only dispatch automatically if not in manual mode
         if not self.manual_mode:
             # Try to dispatch an ambulance immediately
-            dispatch_success = self._dispatch_ambulance(call)
+            dispatch_success = self._dispatch_ambulance(call, relocation_target)
             
             # If no ambulance was available for immediate dispatch, increment missed_calls
             if not dispatch_success and not any(amb.is_available() for amb in self.ambulances):
                 self.missed_calls += 1
+                # Log detailed information about why the call was missed
+                print(f"\n⚠️ Call {call_id} missed at {self.format_time(self.current_time)}")
+                print("  Ambulance statuses:")
+                for amb in self.ambulances:
+                    print(f"    Ambulance {amb.id}: {amb.status.name}")
+                    if amb.status != AmbulanceStatus.IDLE:
+                        print(f"      Busy until: {self.format_time(amb.busy_until)}")
+                print(f"  Call location: node {call['origin_node']}")
                 # Remove from active calls since it's been handled
                 self.active_calls.pop(call_id, None)
                 if call_id in self.call_timeouts:
                     del self.call_timeouts[call_id]
-        #else:
-            # In manual mode, external logic (like an RL agent) will handle the dispatch
-            #if self.verbose:
-                #print(f"  Manual mode: dispatch decision deferred to external controller")
     
-    def _dispatch_ambulance(self, call: Dict) -> bool:
+    def _dispatch_ambulance(self, call: Dict, relocation_target: int = None) -> bool:
         """Dispatch an ambulance to a call using the dispatch policy."""
         call_id = call["call_id"]
         call_node = call["origin_node"]
@@ -415,39 +390,33 @@ class AmbulanceSimulator:
                 else:
                     print(f"  Selected ambulance {selected_amb_id} is not available")
             return False
-        
-        # Calculate travel time
-        travel_time = self.path_cache[selected_ambulance.location][call_node]['travel_time']
-        
+            
         # Dispatch the ambulance
         selected_ambulance.dispatch_to_call(call, self.current_time)
         
-        # Store travel time for later use in statistics
-        self.call_response_times[call_id] = travel_time
-        
-        # Create a dispatch event (instant)
-        self._push_event(
-            self.current_time,
-            EventType.AMB_DISPATCHED,
-            {
-                "amb_id": selected_ambulance.id,
-                "call_id": call_id
-            }
-        )
-        
-        # Schedule arrival event
-        self._push_event(
-            self.current_time + travel_time,
+        # Schedule scene arrival
+        event_id = self._push_event(
+            selected_ambulance.busy_until,
             EventType.AMB_SCENE_ARRIVAL,
-            {
-                "amb_id": selected_ambulance.id,
-                "call_id": call_id
-            }
+            {"amb_id": selected_ambulance.id, "call_id": call_id}
         )
+        
+        # Add call to active calls
+        self.active_calls[call_id] = call
+        
+        # Schedule timeout event
+        timeout_time = self.current_time + int(np.random.normal(self.call_timeout_mean, self.call_timeout_std))
+        timeout_event_id = self._push_event(
+            timeout_time,
+            EventType.CALL_TIMEOUT,
+            {"call_id": call_id, "relocation_target": relocation_target}
+        )
+        self.call_timeouts[call_id] = (timeout_time, timeout_event_id)
         
         if self.verbose:
             print(f"\nDispatched ambulance {selected_ambulance.id} to call {call_id}")
-            print(f"  Travel time: {travel_time:.1f}s ({travel_time/60:.1f} min)")
+            travel_time = selected_ambulance.busy_until - self.current_time
+            print(f"  Travel time: {travel_time/60:.1f} minutes")
             print(f"  From node {selected_ambulance.location} to {call_node}")
         
         return True
@@ -535,6 +504,10 @@ class AmbulanceSimulator:
         # Get call data
         call = self.active_calls.pop(call_id)
         
+        # Calculate and store response time (time from call to scene arrival)
+        response_time = self.current_time - call["time"]
+        self.call_response_times[call_id] = response_time
+        
         # Cancel the timeout event for this call
         if call_id in self.call_timeouts:
             _, timeout_event_id = self.call_timeouts[call_id]
@@ -556,8 +529,10 @@ class AmbulanceSimulator:
         
         if self.verbose:
             print(f"\nAmbulance {amb_id} arrived at scene for call {call_id} at {self.format_time(self.current_time)}")
+            print(f"  Response time: {response_time/60:.1f} minutes")
             service_time = ambulance.busy_until - self.current_time
-            print(f"  On-scene service time: {service_time:.1f} seconds ({service_time/60:.1f} minutes)")
+            print(f"  On-scene service time: {service_time/60:.1f} minutes")
+            print(f"  Will complete service at: {self.format_time(ambulance.busy_until)}")
     
     def _handle_ambulance_service_complete(self, data: Dict):
         """Handle completion of on-scene service."""
@@ -590,13 +565,12 @@ class AmbulanceSimulator:
             EventType.AMB_HOSPITAL_ARRIVAL,
             {"amb_id": amb_id, "call_id": call["call_id"]}
         )
-
         
         if self.verbose:
             print(f"\nAmbulance {amb_id} completed on-scene service at {self.format_time(self.current_time)}")
             print(f"  Transporting to hospital")
             transport_time = ambulance.busy_until - self.current_time
-            print(f"  Transport time: {transport_time:.1f} seconds ({transport_time/60:.1f} minutes)")
+            print(f"  Transport time: {transport_time/60:.1f} minutes")
     
     def _handle_ambulance_hospital_arrival(self, data: Dict):
         """Handle ambulance arrival at hospital."""
@@ -621,7 +595,7 @@ class AmbulanceSimulator:
         if self.verbose:
             print(f"\nAmbulance {amb_id} arrived at hospital at {self.format_time(self.current_time)}")
             transfer_time = ambulance.busy_until - self.current_time
-            print(f"  Hospital transfer time: {transfer_time:.1f} seconds ({transfer_time/60:.1f} minutes)")
+            print(f"  Hospital transfer time: {transfer_time/60:.1f} minutes")
             if call_id is not None:
                 print(f"  For call: {call_id}")
     
@@ -640,14 +614,21 @@ class AmbulanceSimulator:
             self.calls_responded += 1
             self.ambulance_call_counts[amb_id] += 1
             
-            # Calculate and store response time
-            if call_id in self.call_response_times:
-                response_time = self.call_response_times[call_id]
-                self.response_times.append(response_time)
+            # Get the stored response time
+            response_time = self.call_response_times.get(call_id, 0)
+            self.response_times.append(response_time)
             
-            if self.verbose:
-                print(f"\nPatient delivered to hospital for call {call_id}")
-                print(f"  Response time: {response_time/60:.1f} minutes")
+            # Calculate total time from call to drop-off
+            # Get the call data from the ambulance's current_call
+            call = ambulance.current_call
+            if call:
+                total_time = self.current_time - call["time"]
+                self.call_total_times[call_id] = total_time
+                
+                if self.verbose:
+                    print(f"\nAmbulance {amb_id} delivered patient to hospital for call {call_id}")
+                    print(f"  Response time: {response_time/60:.1f} minutes")
+                    print(f"  Total time from call to drop-off: {total_time/60:.1f} minutes")
         
         # Set ambulance to idle
         ambulance.status = AmbulanceStatus.IDLE
@@ -677,7 +658,7 @@ class AmbulanceSimulator:
                     if self.verbose:
                         print(f"\nAmbulance {ambulance.id} started relocating to {new_loc} at {self.format_time(self.current_time)}")
                         relocation_time = ambulance.busy_until - self.current_time
-                        print(f"  Relocation time: {relocation_time:.1f} seconds ({relocation_time/60:.1f} minutes)")
+                        print(f"  Relocation time: {relocation_time/60:.1f} minutes")
         else:
             # Default policy: return to base if not already there
             if ambulance.location != self.base_location:
@@ -693,11 +674,14 @@ class AmbulanceSimulator:
                 if self.verbose:
                     print(f"\nAmbulance {ambulance.id} started relocating to {self.base_location} at {self.format_time(self.current_time)}")
                     relocation_time = ambulance.busy_until - self.current_time
-                    print(f"  Relocation time: {relocation_time:.1f} seconds ({relocation_time/60:.1f} minutes)")
+                    print(f"  Relocation time: {relocation_time/60:.1f} minutes")
         
         if self.verbose:
             print(f"\nAmbulance {amb_id} completed hospital transfer at {self.format_time(self.current_time)}")
-            print(f"  Status: {ambulance.status.name}")
+            if ambulance.status == AmbulanceStatus.RELOCATING:
+                print(f"  Will begin relocation to {ambulance.destination}")
+            else:
+                print(f"  Status: {ambulance.status.name}")
     
     def _handle_ambulance_relocation_complete(self, data: Dict):
         """Handle completion of ambulance relocation."""
@@ -775,16 +759,16 @@ class AmbulanceSimulator:
                     if self.verbose:
                         print(f"\nAmbulance {amb.id} started relocating to {new_loc} at {self.format_time(self.current_time)}")
                         relocation_time = amb.busy_until - self.current_time
-                        print(f"  Relocation time: {relocation_time:.1f} seconds ({relocation_time/60:.1f} minutes)")
+                        print(f"  Relocation time: {relocation_time/60:.1f} minutes")
     
     def print_statistics(self):
         """Print simulation statistics."""
         print("\n===== Simulation Statistics =====")
         print(f"Total calls in dataset: {self.total_calls}")
         print(f"Calls seen: {self.calls_seen}")
-        print(f"Calls responded: {self.calls_responded}")
+        print(f"Calls responded: {self.calls_responded} (delivered to hospital)")
         print(f"Timed-out calls: {self.timed_out_calls}")
-        print(f"Missed calls: {self.missed_calls}")
+        print(f"Missed calls: {self.missed_calls} (missed initially but not timed out)")
         
         # Verify totals
         total_accounted = self.calls_responded + self.missed_calls + self.timed_out_calls
@@ -800,9 +784,17 @@ class AmbulanceSimulator:
         
         if self.response_times:
             avg_rt = sum(self.response_times) / len(self.response_times)
-            print(f"Average response time: {avg_rt:.1f} seconds ({avg_rt/60:.1f} minutes)")
-            print(f"Min response time: {min(self.response_times):.1f} seconds ({min(self.response_times)/60:.1f} minutes)")
-            print(f"Max response time: {max(self.response_times):.1f} seconds ({max(self.response_times)/60:.1f} minutes)")
+            print(f"Average response time: {avg_rt/60:.1f} minutes")
+            print(f"Min response time: {min(self.response_times)/60:.1f} minutes")
+            print(f"Max response time: {max(self.response_times)/60:.1f} minutes")
+        
+        if self.call_total_times:
+            total_times = list(self.call_total_times.values())
+            avg_total = sum(total_times) / len(total_times)
+            print(f"\nTotal time statistics (from call to drop-off):")
+            print(f"Average total time: {avg_total/60:.1f} minutes")
+            print(f"Min total time: {min(total_times)/60:.1f} minutes")
+            print(f"Max total time: {max(total_times)/60:.1f} minutes")
         
         print("\nAmbulance Statistics:")
         for amb_id, count in self.ambulance_call_counts.items():
@@ -832,6 +824,7 @@ class AmbulanceSimulator:
 
         # Track all call IDs from the data
         self.synthetic_call_ids = set()
+        self.calls_seen = 0  # Reset calls_seen counter
 
         # Populate the event queue with call arrival events from the calls_data
         for idx, row in self.call_data.iterrows():
@@ -839,21 +832,33 @@ class AmbulanceSimulator:
             day = row.get("day", 1)
             t = ((day - 1) * self.day_length) + row["second_of_day"]  # Time of the call
             
+            # Use the actual row number (1-based) as the call ID
+            call_id = idx + 1
+            
             call_data = {
                 "time": t,
                 "day": day,
                 "origin_node": row["origin_node"],
                 "destination_node": row["destination_node"],
-                "call_id": idx + 1,  # Use row index + 1 as call ID
+                "call_id": call_id,
                 "intensity": row.get("intensity", 1.0)  # Include call priority if available
             }
-            self.synthetic_call_ids.add(idx + 1)  # Track this call ID
+            self.synthetic_call_ids.add(call_id)  # Track this call ID
             self._push_event(t, EventType.CALL_ARRIVAL, call_data)
             
         if self.verbose:
             num_days = self.call_data["day"].max() if "day" in self.call_data.columns else 1
             print(f"Scheduled {len(self.call_data)} calls over {num_days} days")
             print(f"Call IDs: {sorted(self.synthetic_call_ids)}")
+            print(f"Total calls in data: {self.total_calls}")
+            print(f"Unique call IDs: {len(self.synthetic_call_ids)}")
+            
+            # Verify call counting
+            if len(self.synthetic_call_ids) != self.total_calls:
+                print(f"\nWARNING: Call counting mismatch in setup!")
+                print(f"Total calls in data: {self.total_calls}")
+                print(f"Unique call IDs: {len(self.synthetic_call_ids)}")
+                print(f"Difference: {abs(len(self.synthetic_call_ids) - self.total_calls)}")
 
     def run_day(self):
         """Run the simulation for a full day."""

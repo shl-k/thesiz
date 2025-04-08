@@ -138,8 +138,7 @@ def main():
         simulator=simulator,
         lat_lon_file=test_lat_lon_file,
         verbose=True,
-        max_steps=20,
-        negative_reward_no_dispatch=-1000,
+        max_steps=50,  # Just enough steps to handle our 10 test calls
         render_mode="human"
     )
     

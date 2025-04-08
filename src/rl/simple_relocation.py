@@ -19,6 +19,7 @@ sys.path.append(project_root)
 
 from src.simulator.simulator import AmbulanceSimulator, EventType
 from src.simulator.ambulance import Ambulance, AmbulanceStatus
+from src.utils.clustering import cluster_nodes, get_best_node_in_cluster, load_node_mappings
 
 class SimpleRelocationEnv(gym.Env):
     """
@@ -27,7 +28,7 @@ class SimpleRelocationEnv(gym.Env):
     This environment:
     1. Presents the agent with observations when an ambulance completes service
        (hospital transfer or on-scene service when no transport needed)
-    2. Accepts actions to relocate the ambulance to a specific lat/lon
+    2. Accepts actions to relocate the ambulance to a specific cluster
     3. Provides rewards based on coverage and future response times
     4. Includes time of day in the observation space for time-based decision making
     
@@ -37,7 +38,7 @@ class SimpleRelocationEnv(gym.Env):
     - time_of_day: Normalized time of day (0-1 representing 0-24 hours)
     
     Action space:
-    - lat/lon coordinates representing the relocation target
+    - Discrete space representing cluster IDs to relocate to
     """
     
     metadata = {"render_modes": ["human"]}
@@ -47,7 +48,7 @@ class SimpleRelocationEnv(gym.Env):
         simulator: AmbulanceSimulator,
         node_to_lat_lon_file: str = 'data/matrices/node_to_lat_lon.json',
         lat_lon_to_node_file: str = 'data/matrices/lat_lon_to_node.json',
-        closest_n_nodes: int = 100,  # Number of closest nodes to consider for relocation
+        n_clusters: int = 10,  # Number of clusters for action space
         verbose: bool = False,
         max_steps: int = 1000000,
         reward_scale: float = 1.0,
@@ -59,7 +60,7 @@ class SimpleRelocationEnv(gym.Env):
         Args:
             simulator: The ambulance simulator
             node_to_lat_lon_file: Path to JSON file with node to lat/lon mapping
-            closest_n_nodes: Number of closest nodes to consider for relocation
+            n_clusters: Number of clusters to use for action space
             verbose: Whether to print verbose output
             max_steps: Maximum number of steps per episode
             reward_scale: Scaling factor for rewards
@@ -70,31 +71,30 @@ class SimpleRelocationEnv(gym.Env):
         self.max_steps = max_steps
         self.reward_scale = reward_scale
         self.render_mode = render_mode
-        self.closest_n_nodes = closest_n_nodes
+        self.n_clusters = n_clusters
         
-        # Load node coordinates from file
-        if os.path.exists(node_to_lat_lon_file):
-            if verbose:
-                print(f"Loading node coordinates from {node_to_lat_lon_file}")
-            with open(node_to_lat_lon_file, 'r') as f:
-                raw_coords = json.load(f)
-                # Convert string keys to integers
-                self.node_coords = {int(k): tuple(v) for k, v in raw_coords.items()}
-            if verbose:
-                print(f"Loaded coordinates for {len(self.node_coords)} nodes")
-                
-        # Load reverse mapping from lat/lon to node ID
-        if os.path.exists(lat_lon_to_node_file):
-            if verbose:
-                print(f"Loading lat/lon mapping from {lat_lon_to_node_file}")
-            with open(lat_lon_to_node_file, 'r') as f:
-                self.latlon_to_node = json.load(f)
-        else:
-            raise FileNotFoundError(f"Lat/lon to node mapping file {lat_lon_to_node_file} not found")
-                
-        # Create numpy array of all node coordinates for fast nearest neighbor calculations
-        self.node_ids = list(self.node_coords.keys())
-        self.node_coords_array = np.array([self.node_coords[node] for node in self.node_ids])
+        # Load node mappings
+        self.node_to_lat_lon, self.lat_lon_to_node = load_node_mappings(
+            node_to_lat_lon_file,
+            lat_lon_to_node_file
+        )
+        
+        if verbose:
+            print(f"Loaded mappings for {len(self.node_to_lat_lon)} nodes")
+        
+        # Get call data from simulator
+        self.call_data = simulator.call_data
+        
+        # Create node clusters
+        self.node_to_cluster, self.cluster_centers = cluster_nodes(
+            self.node_to_lat_lon,
+            self.call_data,
+            n_clusters=n_clusters
+        )
+        
+        if verbose:
+            print(f"Created {n_clusters} clusters")
+            print(f"Cluster centers: {self.cluster_centers}")
         
         # Get path cache from simulator
         self.path_cache = simulator.path_cache
@@ -129,59 +129,8 @@ class SimpleRelocationEnv(gym.Env):
             ),
         })
         
-        # Action space: lat/lon coordinates for relocation
-        self.action_space = spaces.Box(
-            low=np.array([min(self.node_coords_array[:, 0]), min(self.node_coords_array[:, 1])]),
-            high=np.array([max(self.node_coords_array[:, 0]), max(self.node_coords_array[:, 1])]),
-            shape=(2,),
-            dtype=np.float32
-        )
-    
-    def get_node_coords(self, node_id):
-        """Get the coordinates for a node."""
-        return self.node_coords[node_id]
-    
-    def get_nearest_node(self, lat, lon):
-        """
-        Find the nearest node to the given lat/lon coordinates using path cache.
-        
-        Args:
-            lat: Latitude
-            lon: Longitude
-            
-        Returns:
-            int: Node ID of the nearest node
-        """
-        # Check if exact coordinates exist in the mapping
-        rounded_lat, rounded_lon = round(lat, 6), round(lon, 6)
-        if (rounded_lat, rounded_lon) in self.latlon_to_node:
-            return self.latlon_to_node[(rounded_lat, rounded_lon)]
-        
-        # If exact coordinates not found, find the nearest node using coordinates
-        # First get coordinates for all nodes
-        node_distances = []
-        for node_id, (node_lat, node_lon) in self.node_coords.items():
-            # Calculate straight-line distance
-            dist = ((node_lat - lat) ** 2 + (node_lon - lon) ** 2) ** 0.5
-            node_distances.append((node_id, dist))
-        
-        # Sort by distance and take top 10 nodes
-        node_distances.sort(key=lambda x: x[1])
-        nearest_nodes = [node_id for node_id, _ in node_distances[:10]]
-        
-        # Among these nodes, find the one with minimum travel time from PFARS
-        base_node = 241  # PFARS location
-        min_travel_time = float('inf')
-        nearest_node = None
-        
-        for node_id in nearest_nodes:
-            if node_id in self.path_cache[base_node]:
-                travel_time = self.path_cache[base_node][node_id]['travel_time']
-                if travel_time < min_travel_time:
-                    min_travel_time = travel_time
-                    nearest_node = node_id
-        
-        return nearest_node if nearest_node is not None else 241  # Fallback to base
+        # Action space: discrete space for cluster IDs
+        self.action_space = spaces.Discrete(n_clusters)
     
     def reset(self, seed=None, options=None):
         """
@@ -212,7 +161,7 @@ class SimpleRelocationEnv(gym.Env):
         Take a step in the environment.
         
         Args:
-            action: Lat/lon coordinates for relocation
+            action: Cluster ID to relocate to
             
         Returns:
             observation, reward, terminated, truncated, info
@@ -220,16 +169,26 @@ class SimpleRelocationEnv(gym.Env):
         # Initialize reward
         reward = 0.0
         
-        # Convert lat/lon to node ID
-        lat, lon = action
-        target_node = self.get_nearest_node(lat, lon)
-        
         # Get the ambulance that just completed service
         amb_idx = int(self.completed_ambulance["id"])
         ambulance = self.simulator.ambulances[amb_idx]
         
         # Calculate reward before relocation (for comparison)
         pre_relocation_response_time = self._calculate_average_response_time(ambulance.location)
+        
+        # Get best node in the selected cluster
+        target_node = get_best_node_in_cluster(
+            action,
+            self.node_to_cluster,
+            self.node_to_lat_lon,
+            self.simulator.active_calls,
+            self.path_cache,
+            self.simulator.current_time
+        )
+        
+        if target_node is None:
+            # If no valid node found in cluster, use cluster center
+            target_node = self.cluster_centers[action]
         
         # Perform relocation
         ambulance.relocate(target_node, self.simulator.current_time)
@@ -292,33 +251,9 @@ class SimpleRelocationEnv(gym.Env):
             
             # For other events, just continue processing
     
-    def render(self):
-        """Render the current state of the environment."""
-        if self.render_mode == "human":
-            # Time information
-            total_seconds = int(self.simulator.current_time)
-            hours = total_seconds // 3600 % 24
-            minutes = (total_seconds % 3600) // 60
-            time_str = f"{hours:02d}:{minutes:02d}"
-            
-            # Ambulance information
-            print(f"Time: {time_str}")
-            print(f"Step: {self.steps}")
-            
-            if self.completed_ambulance:
-                amb_id = self.completed_ambulance["id"]
-                amb_loc = self.completed_ambulance["location"]
-                lat, lon = self.completed_ambulance["coords"]
-                print(f"Ambulance {amb_id} just completed service at node {amb_loc} ({lat:.4f}, {lon:.4f})")
-                
-            print("\nAmbulance status:")
-            for i, amb in enumerate(self.simulator.ambulances):
-                status_str = amb.status.name
-                loc = amb.location
-                lat, lon = self.get_node_coords(loc) if loc in self.node_coords else (0, 0)
-                print(f"  Ambulance {amb.id}: {status_str} at node {loc} ({lat:.4f}, {lon:.4f})")
-                
-            print("\n")
+    def get_node_coords(self, node_id):
+        """Get the coordinates for a node."""
+        return self.node_to_lat_lon[node_id]
     
     def _calculate_average_response_time(self, location):
         """
@@ -358,14 +293,14 @@ class SimpleRelocationEnv(gym.Env):
         reward = 0.0
         
         # Get coordinates of the location
-        if location not in self.node_coords:
+        if location not in self.node_to_lat_lon:
             return 0.0
             
         loc_coords = np.array(self.get_node_coords(location))
         
         # Calculate distances to other ambulances
         for amb in self.simulator.ambulances:
-            if amb.location in self.node_coords and amb.location != location:
+            if amb.location in self.node_to_lat_lon and amb.location != location:
                 amb_coords = np.array(self.get_node_coords(amb.location))
                 distance = np.sqrt(np.sum((loc_coords - amb_coords)**2))
                 # Reward for being not too close and not too far from other ambulances
@@ -375,7 +310,7 @@ class SimpleRelocationEnv(gym.Env):
         # Calculate distances to active calls
         for call in self.simulator.active_calls.values():
             call_node = call["origin_node"]
-            if call_node in self.node_coords:
+            if call_node in self.node_to_lat_lon:
                 call_coords = np.array(self.get_node_coords(call_node))
                 distance = np.sqrt(np.sum((loc_coords - call_coords)**2))
                 # Reward for being close to calls
@@ -394,7 +329,7 @@ class SimpleRelocationEnv(gym.Env):
         # Ambulance information
         ambulances_obs = []
         for amb in self.simulator.ambulances:
-            if amb.location in self.node_coords:
+            if amb.location in self.node_to_lat_lon:
                 lat, lon = self.get_node_coords(amb.location)
             else:
                 # Use default coordinates if location not in mapping

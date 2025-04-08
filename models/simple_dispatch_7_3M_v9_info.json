@@ -1,0 +1,34 @@
+{
+  "hyperparameters": {
+    "learning_rate": 0.0002,
+    "n_steps": 2048,
+    "batch_size": 512,
+    "gamma": 0.99,
+    "ent_coef": 0.01,
+    "clip_range": 0.2,
+    "max_steps": 3000000,
+    "num_ambulances": 3,
+    "total_timesteps": 3000000
+  },
+  "data_files": {
+    "graph_file": "data/processed/princeton_graph.gpickle",
+    "calls_file": "data/processed/synthetic_calls.csv",
+    "path_cache_file": "data/matrices/path_cache.pkl",
+    "node_to_idx_file": "data/matrices/node_id_to_idx.json",
+    "idx_to_node_file": "data/matrices/idx_to_node_id.json",
+    "node_to_lat_lon_file": "data/matrices/node_to_lat_lon.json",
+    "lat_lon_to_node_file": "data/matrices/lat_lon_to_node.json",
+    "calls_file_md5": "7acc1908362582cf8046659c5b0d8383"
+  },
+  "call_data_stats": {
+    "total_calls": 48,
+    "days_covered": 7,
+    "unique_origin_nodes": 44,
+    "unique_destination_nodes": 1
+  },
+  "metadata": {
+    "timestamp": "2025-04-07_18-12-23",
+    "model_name": "simple_dispatch_7_3M_v9",
+    "final_model_path": "models/simple_dispatch_7_3M_v9"
+  }
+}

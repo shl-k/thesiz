@@ -135,7 +135,7 @@ class Ambulance:
             if base_location is not None:
                 self.relocate(base_location, current_time)
             else:
-                # Otherwise just set to IDLE
+                # Otherwise just set to IDLE and reset busy_until to current time
                 self.status = AmbulanceStatus.IDLE
                 self.busy_until = current_time
                 

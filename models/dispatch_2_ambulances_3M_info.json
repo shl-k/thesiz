@@ -1,0 +1,34 @@
+{
+  "hyperparameters": {
+    "learning_rate": 1e-4,
+    "n_steps": 2048,
+    "batch_size": 128,
+    "gamma": 0.995,
+    "ent_coef": 0.01,
+    "clip_range": 0.2,
+    "max_steps": 3000000,
+    "num_ambulances": 2,
+    "total_timesteps": 3000000
+  },
+  "environment": {
+    "num_ambulances": 2,
+    "base_location": 241,
+    "hospital_location": 1293,
+    "call_timeout_mean": 600,
+    "call_timeout_std": 60
+  },
+  "reward_structure": {
+    "dispatch_success": 15,
+    "scene_arrival": 15,
+    "hospital_delivery": 30,
+    "unavailable_ambulance_penalty": -15,
+    "no_dispatch_penalty": -30,
+    "timeout_penalty": -30,
+    "travel_time_penalty": "minutes"
+  },
+  "metadata": {
+    "timestamp": "2024-04-07",
+    "model_name": "dispatch_2_ambulances_3M",
+    "description": "Two ambulance configuration to test performance with reduced fleet size"
+  }
+} 

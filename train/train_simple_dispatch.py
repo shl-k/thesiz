@@ -30,11 +30,11 @@ from src.simulator.simulator import AmbulanceSimulator
 from src.simulator.policies import StaticRelocationPolicy
 
 # Training parameters
-TOTAL_TIMESTEPS = 1000000
-SAVE_FREQ = 0  # How often to save checkpoints (set to 0 to disable)
+TOTAL_TIMESTEPS = 3000000  # Keep at 3M steps
+SAVE_FREQ = 0  # Save checkpoints every 100k steps
 LOG_DIR = Path("logs/simple_dispatch")
 MODEL_DIR = Path("models")
-MODEL_NAME = "simple_dispatch_7_1M_v5"
+MODEL_NAME = "dispatch_1_ambulance_3M_v1"  # Single ambulance version
 
 # Data paths
 GRAPH_FILE = "data/processed/princeton_graph.gpickle"
@@ -90,7 +90,7 @@ def create_env():
     simulator = AmbulanceSimulator(
         graph=G,
         call_data=calls,
-        num_ambulances=3,
+        num_ambulances=1,  # Single ambulance
         base_location=base_node,
         hospital_node=hospital_node,
         call_timeout_mean=600,  # 10 minute timeout
@@ -109,8 +109,7 @@ def create_env():
         simulator=simulator,
         lat_lon_file=NODE_TO_LAT_LON_FILE,
         verbose=False,
-        max_steps=1000000,  # Set to 1 million to never cut off episodes
-        negative_reward_no_dispatch=-1000
+        max_steps=3000000,  # Set to 3M to match training duration
     )
     
     return env
@@ -135,12 +134,14 @@ def main():
         vec_env,
         verbose=1,
         tensorboard_log=str(LOG_DIR),
-        learning_rate=3e-4,
-        n_steps=2048,
-        batch_size=256,
-        gamma=0.98,
-        ent_coef=0.02,
-        clip_range=0.2
+        learning_rate=2e-4,    # More aggressive
+        n_steps=2048,          # Keep this
+        batch_size=512,        # Larger batches
+        gamma=0.99,            # Slightly less future-focused
+        ent_coef=0.015,        # More exploration
+        clip_range=0.2,        # Keep this
+        n_epochs=10,           # More training per batch
+        vf_coef=0.6           # Better value estimation
     )
     
     # Set up checkpoint callback if saving frequency > 0
@@ -162,7 +163,7 @@ def main():
     )
     
     # Save the final model
-    final_model_path = MODEL_DIR / f"{MODEL_NAME}_final"
+    final_model_path = MODEL_DIR / f"{MODEL_NAME}"
     model.save(final_model_path)
     print(f"Model saved to {final_model_path}")
     
@@ -180,27 +181,35 @@ def main():
     training_info = {
         # Model hyperparameters
         "hyperparameters": {
-            "learning_rate": 3e-4,
+            "learning_rate": 2e-4,
             "n_steps": 2048,
-            "batch_size": 256,
-            "gamma": 0.98,
-            "ent_coef": 0.02,
+            "batch_size": 512,
+            "gamma": 0.99,
+            "ent_coef": 0.015,
             "clip_range": 0.2,
-            "max_steps": 1000000,
-            "negative_reward_no_dispatch": -1000,
-            "num_ambulances": 3,
+            "max_steps": 3000000,
+            "num_ambulances": 1,  # Document that this is a 1-ambulance model
             "total_timesteps": TOTAL_TIMESTEPS,
+        },
+        
+        # Environment configuration
+        "environment": {
+            "num_ambulances": 1,  # Explicitly document ambulance count
+            "base_location": 241,  # PFARS location
+            "hospital_location": 1293,  # Princeton hospital
+            "call_timeout_mean": 600,  # 10 minute timeout
+            "call_timeout_std": 60,    # 1 minute std
         },
         
         # Data files used
         "data_files": {
-            "graph_file": GRAPH_FILE,
-            "calls_file": CALLS_FILE,
-            "path_cache_file": PATH_CACHE_FILE,
-            "node_to_idx_file": NODE_TO_IDX_FILE,
-            "idx_to_node_file": IDX_TO_NODE_FILE,
-            "node_to_lat_lon_file": NODE_TO_LAT_LON_FILE,
-            "lat_lon_to_node_file": LAT_LON_TO_NODE_FILE,
+            "graph_file": str(GRAPH_FILE),  # Convert Path to string
+            "calls_file": str(CALLS_FILE),
+            "path_cache_file": str(PATH_CACHE_FILE),
+            "node_to_idx_file": str(NODE_TO_IDX_FILE),
+            "idx_to_node_file": str(IDX_TO_NODE_FILE),
+            "node_to_lat_lon_file": str(NODE_TO_LAT_LON_FILE),
+            "lat_lon_to_node_file": str(LAT_LON_TO_NODE_FILE),
             "calls_file_md5": calls_file_hash
         },
         
@@ -216,7 +225,8 @@ def main():
         "metadata": {
             "timestamp": datetime.now().strftime("%Y-%m-%d_%H-%M-%S"),
             "model_name": MODEL_NAME,
-            "final_model_path": str(final_model_path)
+            "final_model_path": str(final_model_path),  # Convert Path to string
+            "description": "Single ambulance configuration to test performance with reduced fleet size"
         }
     }
     

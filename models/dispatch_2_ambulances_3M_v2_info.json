@@ -1,0 +1,42 @@
+{
+  "hyperparameters": {
+    "learning_rate": 0.0002,
+    "n_steps": 2048,
+    "batch_size": 512,
+    "gamma": 0.99,
+    "ent_coef": 0.015,
+    "clip_range": 0.2,
+    "max_steps": 3000000,
+    "num_ambulances": 2,
+    "total_timesteps": 3000000
+  },
+  "environment": {
+    "num_ambulances": 2,
+    "base_location": 241,
+    "hospital_location": 1293,
+    "call_timeout_mean": 600,
+    "call_timeout_std": 60
+  },
+  "data_files": {
+    "graph_file": "data/processed/princeton_graph.gpickle",
+    "calls_file": "data/processed/synthetic_calls.csv",
+    "path_cache_file": "data/matrices/path_cache.pkl",
+    "node_to_idx_file": "data/matrices/node_id_to_idx.json",
+    "idx_to_node_file": "data/matrices/idx_to_node_id.json",
+    "node_to_lat_lon_file": "data/matrices/node_to_lat_lon.json",
+    "lat_lon_to_node_file": "data/matrices/lat_lon_to_node.json",
+    "calls_file_md5": "7acc1908362582cf8046659c5b0d8383"
+  },
+  "call_data_stats": {
+    "total_calls": 48,
+    "days_covered": 7,
+    "unique_origin_nodes": 44,
+    "unique_destination_nodes": 1
+  },
+  "metadata": {
+    "timestamp": "2025-04-07_22-05-31",
+    "model_name": "dispatch_2_ambulances_3M_v2",
+    "final_model_path": "models/dispatch_2_ambulances_3M_v2",
+    "description": "Two ambulance configuration to test performance with reduced fleet size"
+  }
+}
