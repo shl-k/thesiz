@@ -2,16 +2,15 @@
 Utility functions for clustering nodes based on coordinates and demand data.
 """
 
-import numpy as np
+import numpy as np, pandas as pd, json
 from sklearn.cluster import KMeans
 from typing import Dict, List, Tuple
-import pandas as pd
-import json
-import os
+
 
 def load_node_mappings(
     node_to_lat_lon_file: str = 'data/matrices/node_to_lat_lon.json',
     lat_lon_to_node_file: str = 'data/matrices/lat_lon_to_node.json'
+    
 ) -> Tuple[Dict[int, Tuple[float, float]], Dict[Tuple[float, float], int]]:
     """
     Load node coordinate mappings from files.

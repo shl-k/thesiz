@@ -103,6 +103,7 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
     # Get PFARS HQ node and hospital node
     pfars_node = lat_lon_to_node(G, 40.361395, -74.664879)
     hospital_node = lat_lon_to_node(G, 40.340339, -74.623913)
+    call_21 = 1391
     print(f"Using PFARS HQ node: {pfars_node}")
     print(f"Using hospital node: {hospital_node}")
     
@@ -669,10 +670,10 @@ def main():
     #enerate_node_list(G)
 
     # Generate lat/lon to node mapping
-    generate_lat_lon_to_node_mapping(GRAPH_FILE)
+    #generate_lat_lon_to_node_mapping(GRAPH_FILE)
 
     # Generate node to lat/lon mapping
-    generate_node_to_lat_lon_mapping(GRAPH_FILE)
+    #generate_node_to_lat_lon_mapping(GRAPH_FILE)
 
 
     #generate synthetic calls
@@ -697,7 +698,7 @@ def main():
     '''
     
     # Visualize the graph with critical nodes
-    #visualize_graph(G, pfars_node, hospital_node, "Princeton Road Network")
+    visualize_graph(G, 241, 1293, "Princeton Road Network")
     
     # Visualize medical trips
     #visualize_medical_trips(G, MEDICAL_TRIPS_FILE, "Princeton Medical Trip Origins")
