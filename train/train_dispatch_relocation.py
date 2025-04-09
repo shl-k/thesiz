@@ -56,11 +56,11 @@ class CSVRewardLogger(BaseCallback):
         return True
 
 def main():
-    TOTAL_TIMESTEPS = 3_000_000
-    SAVE_FREQ = 1000000
+    TOTAL_TIMESTEPS = 300_000
+    SAVE_FREQ = 300_000
     LOG_DIR = Path("logs/dispatch_relocation")
     MODEL_DIR = Path("models/dispatch_relocation")
-    MODEL_NAME = "dispatch_relocation_1_ambulance_3M_v1"
+    MODEL_NAME = "dispatch_relocation_1_ambulance_300K_v1"
 
     LOG_DIR.mkdir(exist_ok=True, parents=True)
     MODEL_DIR.mkdir(exist_ok=True, parents=True)

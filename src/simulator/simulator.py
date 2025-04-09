@@ -3,7 +3,7 @@
 import heapq
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Optional, Tuple
 from collections import Counter
 
 import numpy as np
@@ -56,6 +56,7 @@ class AmbulanceSimulator:
         call_timeout_std: float = 30.0,
         day_length: int = SECONDS_IN_DAY,
     ) -> None:
+        
         # Static inputs
         self.graph = graph
         self.call_data = call_data.sort_values(["day", "second_of_day"]).reset_index(drop=True)

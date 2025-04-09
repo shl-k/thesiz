@@ -1,0 +1,20 @@
+{
+  "hyperparams": {
+    "learning_rate": 0.0002,
+    "n_steps": 2048,
+    "batch_size": 512,
+    "gamma": 0.99,
+    "ent_coef": 0.015,
+    "clip_range": 0.2,
+    "n_epochs": 10,
+    "vf_coef": 0.6,
+    "total_timesteps": 300000
+  },
+  "env_settings": {
+    "num_ambulances": 1,
+    "n_clusters": 8,
+    "timeout": 600
+  },
+  "model_name": "dispatch_relocation_1_ambulance_300K_v1",
+  "timestamp": "2025-04-09T01:36:16.835214"
+}

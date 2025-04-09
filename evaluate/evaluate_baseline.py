@@ -33,7 +33,7 @@ def main():
     simulator = AmbulanceSimulator(
         graph=G,
         call_data=calls,
-        num_ambulances=2,
+        num_ambulances=6,
         base_location=241,
         hospital_node=1293,
         path_cache=path_cache,
