@@ -13,7 +13,7 @@ from pathlib import Path
 import pickle
 import json
 import matplotlib.pyplot as plt
-
+from matplotlib.lines import Line2D
 # Add project root to Python path
 project_root = str(Path(__file__).parent.parent.parent)
 sys.path.append(project_root)
@@ -31,7 +31,7 @@ GRAPH_FILE = 'data/processed/princeton_graph.gpickle'
 PATH_CACHE_FILE = 'data/matrices/path_cache.pkl'
 NODE_TO_LAT_LON_FILE = 'data/matrices/node_to_lat_lon.json'
 LAT_LON_TO_NODE_FILE = 'data/matrices/lat_lon_to_node.json'
-NUMDAYS = 7
+NUMDAYS = 100
 
 # Define Princeton bounding box
 # Format: (west, south, east, north)
@@ -212,9 +212,8 @@ def generate_demand_with_temporal_pattern(G, medical_trips_file=MEDICAL_TRIPS_FI
     calls_df = pd.DataFrame(synthetic_calls)
     
     # Save the synthetic calls to a CSV file
-    output_file = 'data/processed/synthetic_calls.csv'
-    calls_df.to_csv(output_file, index=False)
-    print(f"Synthetic calls saved to: {output_file}")
+    calls_df.to_csv(SYNTHETIC_CALLS_FILE, index=False)
+    print(f"Synthetic calls saved to: {SYNTHETIC_CALLS_FILE}")
     print(f"Total calls generated: {len(calls_df)}")
     print("\nCalls per day:")
     print(calls_df.groupby('day').size())
@@ -445,7 +444,8 @@ def visualize_graph(G, pfars_node, hospital_node, title="Princeton Road Network"
     print(f"Total nodes: {len(G.nodes)}")
     print(f"Total edges: {len(G.edges)}")
 
-def visualize_medical_trips(G, medical_trips_file=MEDICAL_TRIPS_FILE, title="Princeton Medical Trip Origins"):
+
+def visualize_medical_trips(G, medical_trips_file=MEDICAL_TRIPS_FILE):
     """
     Visualize all medical trip origin points on the graph.
     
@@ -471,28 +471,38 @@ def visualize_medical_trips(G, medical_trips_file=MEDICAL_TRIPS_FILE, title="Pri
         # Find nearest node for origin
         
         # Plot origin point using lat/lon coordinates
-        ax.scatter(trip['origin_lon'], trip['origin_lat'], c='red', s=50, alpha=0.5)
+        ax.scatter(trip['origin_lon'], trip['origin_lat'], c='red', s=trip['intensity']*2, alpha=0.5)
         
         # Print origin node info
         #print(f"Origin: {trip['origin_name']}, Node: {origin_node}, Coords: ({trip['origin_lat']}, {trip['origin_lon']})")
+        # Plot PFARS HQ
+
+    pfars_coords = node_coords[241]
+    ax.scatter(pfars_coords[0], pfars_coords[1], c='green', s=75, alpha=0.95)
     
+    # Plot Hospital
+    hospital_coords = node_coords[1293]
+    ax.scatter(hospital_coords[0], hospital_coords[1], c='blue', s=75, alpha=0.95)
+
     # Add legend
     from matplotlib.lines import Line2D
     legend_elements = [
         Line2D([0], [0], marker='o', color='w', markerfacecolor='red', 
-               markersize=10, label='Call Origin')
+               markersize=10, label='Call Origin'), 
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='blue', 
+               markersize=10, label='Hospital'),
+        Line2D([0], [0], marker='o', color='w', markerfacecolor='green', 
+               markersize=10, label='PFARS HQ')
     ]
     ax.legend(handles=legend_elements, loc='upper right')
     
-    # Add title
-    ax.set_title(title)
-    
     # Save the plot
-    plt.savefig('data/processed/princeton_synthetic_origins.png', dpi=300, bbox_inches='tight')
+    plt.savefig(f'data/processed/{NUMDAYS}_princeton_medical_origins.png', dpi=300, bbox_inches='tight')
     plt.close()
     
-    print(f"\nMedical trip origins visualization saved to data/processed/princeton_synthetic_origins.png")
+    print(f"\nMedical trip origins visualization saved to results/{NUMDAYS}_princeton_medical_origins.png")
     print(f"Total origins plotted: {len(trips_df)}")
+
 
 def generate_node_list(G):
     """
@@ -645,66 +655,20 @@ def main():
     else:
         print("Loading existing graph...")
         G = pickle.load(open(GRAPH_FILE, 'rb'))
-    '''
-    # Check if path cache exists, if not generate it
-    if not os.path.exists(PATH_CACHE_FILE):
-        print("Generating new path cache...")
-        path_cache = precompute_shortest_paths(G)
-    else:
-        print("Loading existing path cache...")
-        path_cache = pickle.load(open(PATH_CACHE_FILE, 'rb'))   
-
-    # Check if lat/lon mapping exists, if not generate it
-    if not os.path.exists(LAT_LON_TO_NODE_FILE):
-        print("Generating new lat/lon mapping...")
-        lat_lon_mapping = generate_lat_lon_to_node_mapping(GRAPH_FILE)
-    else:
-        print("Loading existing lat/lon mapping...")
-        lat_lon_mapping = pickle.load(open(LAT_LON_TO_NODE_FILE, 'rb'))
-    '''
-    # Calculate average travel time
-    #average_travel_time = calculate_average_travel_time(G, path_cache)
-    #print(f"Average travel time: {average_travel_time:.2f} seconds")
-
-    # Generate node list for mapping node IDs to indices
-    #enerate_node_list(G)
-
-    # Generate lat/lon to node mapping
-    #generate_lat_lon_to_node_mapping(GRAPH_FILE)
-
-    # Generate node to lat/lon mapping
-    #generate_node_to_lat_lon_mapping(GRAPH_FILE)
+    
+    # Extract Medical Trips
+    #extract_medical_trips(PRINCETON_TRIPS_FILE, MEDICAL_TRIPS_FILE)
 
 
     #generate synthetic calls
     #generate_demand_with_temporal_pattern(G, num_days=NUMDAYS)
 
-    '''
-    print("G is of type:", type(G))
-    print(f"Original graph: {len(G.nodes)} nodes, {len(G.edges)} edges")
-    
-    # Get PFARS HQ node and hospital node
-    print("\nDebug - PFARS HQ coordinates:")
-    print(f"Lat: 40.361395, Lon: -74.664879")
-    pfars_node = lat_lon_to_node(G, 40.361395, -74.664879)
-    print(f"Found PFARS node: {pfars_node}")
-    print(f"PFARS node coordinates: {G.nodes[pfars_node]['y']}, {G.nodes[pfars_node]['x']}")
-    
-    print("\nDebug - Hospital coordinates:")
-    print(f"Lat: 40.340339, Lon: -74.623913")
-    hospital_node = lat_lon_to_node(G, 40.340339, -74.623913)
-    print(f"Found hospital node: {hospital_node}")
-    print(f"Hospital node coordinates: {G.nodes[hospital_node]['y']}, {G.nodes[hospital_node]['x']}")
-    '''
-    
-    # Visualize the graph with critical nodes
-    visualize_graph(G, 241, 1293, "Princeton Road Network")
-    
+
     # Visualize medical trips
-    #visualize_medical_trips(G, MEDICAL_TRIPS_FILE, "Princeton Medical Trip Origins")
-    
+    #visualize_medical_trips(G, PRINCETON_TRIPS_FILE, "Princeton All Trip Origins")
+
     # Visualize synthetic calls
-    #visualize_medical_trips(G, SYNTHETIC_CALLS_FILE, "Princeton Synthetic Call Origins")
+    visualize_medical_trips(G, SYNTHETIC_CALLS_FILE)
 
 
 
