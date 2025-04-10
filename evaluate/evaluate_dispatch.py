@@ -31,7 +31,7 @@ from src.simulator.simulator import AmbulanceSimulator
 # CONFIGURATION – EDIT AS NEEDED
 # -----------------------------
 MODEL_PATHS = [
-    "models/dispatch_M2v2/dispatch_M2v2",
+    "models/dispatch_M3/dispatch_M3",
     # Add additional model paths if desired
 ]
 GRAPH_PATH    = "data/processed/princeton_graph.gpickle"
@@ -41,7 +41,7 @@ IDX_PATH      = "data/matrices/node_id_to_idx.json"
 NODE_PATH     = "data/matrices/idx_to_node_id.json"
 LATLON_PATH   = "data/matrices/node_to_lat_lon.json"
 
-NUM_AMBULANCES   = 2
+NUM_AMBULANCES   = 3
 BASE_NODE        = 241
 HOSP_NODE        = 1293
 CALL_TIMEOUT_MEAN = 491
@@ -108,7 +108,11 @@ def evaluate_model(model_path: str) -> None:
         decision_times.append(t1 - t0)
         obs, _, done, _ = env.step(action)
 
-       # 6) Collect stats
+    # Print simulator statistics
+    print("\n===== Simulation Statistics =====")
+    sim._print_statistics()
+
+    # 6) Collect stats
     total_calls = sim.total_calls
     responded   = sim.calls_responded
     rts         = np.array(sim.response_times)

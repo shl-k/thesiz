@@ -365,7 +365,7 @@ class AmbulanceSimulator:
         call = self.active_calls.pop(call_id)
         response_time = self.current_time - call["time"]
         self.call_response_times[call_id] = response_time
-        self.response_times.append(response_time)
+        
 
         # Cancel this call's timeout
         if call_id in self.call_timeouts:
@@ -485,19 +485,6 @@ class AmbulanceSimulator:
         print(f"Missed calls (no units at arrival): {outcome_counts['missed']}")
         print(f"Calls rescued (missed --> responded): {self.calls_rescued}")
         print(f"Unclassified calls: {self.total_calls - sum(outcome_counts.values())}")
-
-        for call_id, status in self.call_status.items():
-            if status == "timed_out":
-                print(f"🚨 Call {call_id} ended as TIMED OUT")
-        for call_id, status in self.call_status.items():
-            if status == "ignored":
-                print(f"🚨 Call {call_id} ended as IGNORED")
-        for call_id, status in self.call_status.items():
-            if status == "responded":
-                print(f"✅ Call {call_id} ended as RESPONDED")
-        for call_id, status in self.call_status.items():
-            if status == "missed":
-                print(f"⚠️ Call {call_id} ended as MISSED")
 
         # Breakdown of timed-out causes
         if outcome_counts["timed_out"] > 0:

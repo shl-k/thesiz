@@ -82,6 +82,7 @@ class DispatchRelocEnv(gym.Env):
         self.idle_amb_id = None
         self.steps = 0
         self.done = False
+        self.response_times = []
         self.partial_reward = 0.0
 
         self._advance_until_actionable()

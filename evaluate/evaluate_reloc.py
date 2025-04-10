@@ -15,6 +15,7 @@ import pandas as pd
 
 from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
+from stable_baselines3.common.evaluation import evaluate_policy
 
 # Add the project root to the Python path
 current_dir = os.path.dirname(os.path.abspath(__file__))
@@ -98,6 +99,11 @@ def evaluate_model(model_path: str) -> None:
     model = PPO.load(model_path)
     print(f"Loaded PPO model from {model_path}")
 
+    # Evaluate policy over multiple episodes
+    print("\n===== Policy Evaluation (100 episodes) =====")
+    mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100, deterministic=True)
+    print(f"Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
+
     # 5) Run simulation
     obs = env.reset()
     done = False
@@ -109,6 +115,22 @@ def evaluate_model(model_path: str) -> None:
         t1 = time.time()
         decision_times.append(t1 - t0)
         obs, _, done, _ = env.step(action)
+
+    # Print simulator statistics
+    print("\n===== Simulation Statistics =====")
+    sim._print_statistics()
+
+    # Print environment statistics
+    print("\n===== Environment Statistics =====")
+    env_stats = env.envs[0].get_stats()
+    print(f"Total calls: {env_stats['total_calls']}")
+    print(f"Calls responded: {env_stats['calls_responded']}")
+    print(f"Completion rate: {env_stats['completion_rate']:.2%}")
+    if env_stats['avg_response_time'] is not None:
+        print(f"Average response time: {env_stats['avg_response_time']/60:.2f} minutes")
+    else:
+        print("No response times recorded")
+
     # 6) Collect stats
     total_calls = sim.total_calls
     responded   = sim.calls_responded
@@ -160,6 +182,7 @@ def evaluate_model(model_path: str) -> None:
 def main():
     for mp in MODEL_PATHS:
         evaluate_model(mp)
+    
 
 if __name__ == "__main__":
     main()
