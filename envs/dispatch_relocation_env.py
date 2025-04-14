@@ -13,7 +13,6 @@ To remove 2D shape warnings and negative-lon errors:
  - We flatten the observation into a 1D Box with shape=(obs_dim,).
  - The Box range is [-9999, 9999].
 """
-# Fixed DispatchRelocEnv with pending call queue + improved no-dispatch logic
 
 import os, sys, numpy as np, pandas as pd
 from typing import Optional, List, Dict

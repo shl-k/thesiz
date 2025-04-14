@@ -27,9 +27,7 @@ sys.path.append(project_root)
 from envs.simple_dispatch import SimpleDispatchEnv
 from src.simulator.simulator import AmbulanceSimulator
 
-# -----------------------------
-# CONFIGURATION – EDIT AS NEEDED
-# -----------------------------
+
 MODEL_PATHS = [
     "models/dispatch_M3/dispatch_M3",
     # Add additional model paths if desired
@@ -56,7 +54,7 @@ def evaluate_model(model_path: str) -> None:
     model_name = Path(model_path).stem
     print(f"\n=== Evaluating {model_name} ===")
 
-    # 1) Load data, graph, and matrices
+
     graph      = pickle.load(open(GRAPH_PATH, "rb"))
     calls      = pd.read_csv(CALLS_PATH)
     path_cache = pickle.load(open(CACHE_PATH, "rb"))
@@ -65,7 +63,7 @@ def evaluate_model(model_path: str) -> None:
     node_to_idx = {int(k): v for k, v in node_to_idx.items()}
     idx_to_node = {int(k): int(v) for k, v in idx_to_node.items()}
 
-    # 2) Create the simulator
+
     sim = AmbulanceSimulator(
         graph=graph,
         call_data=calls,
@@ -80,11 +78,8 @@ def evaluate_model(model_path: str) -> None:
         manual_mode=True,   # PPO will decide dispatch actions
         verbose=False
     )
-
-    # 3) Create the environment (VecEnv wrapping SimpleDispatchEnv)
     env = DummyVecEnv([lambda: SimpleDispatchEnv(sim, node_to_lat_lon_file=LATLON_PATH, verbose=False)])
 
-    # If VecNormalize stats are saved, load them
     vecnorm_path = model_path.replace(".zip", "_vecnorm.pkl")
     if os.path.exists(vecnorm_path):
         env = VecNormalize.load(vecnorm_path, env)
@@ -92,11 +87,10 @@ def evaluate_model(model_path: str) -> None:
         env.norm_reward = False
         print(f"Loaded VecNormalize stats from {vecnorm_path}")
 
-    # 4) Load the trained PPO model
+
     model = PPO.load(model_path)
     print(f"Loaded PPO model from {model_path}")
 
-    # 5) Run one episode
     obs = env.reset()
     done = False
     decision_times = []  # To measure model decision speed
@@ -108,11 +102,9 @@ def evaluate_model(model_path: str) -> None:
         decision_times.append(t1 - t0)
         obs, _, done, _ = env.step(action)
 
-    # Print simulator statistics
     print("\n===== Simulation Statistics =====")
     sim._print_statistics()
 
-    # 6) Collect stats
     total_calls = sim.total_calls
     responded   = sim.calls_responded
     rts         = np.array(sim.response_times)
@@ -128,7 +120,6 @@ def evaluate_model(model_path: str) -> None:
     else:
         avg_rt_min = std_rt_min = min_rt_min = max_rt_min = None
 
-    # 7) Print summary
     print(f"\n--- RESULTS for {model_name} ---")
     print(f"Calls responded: {responded} / {total_calls}")
     if avg_rt_min is not None:
@@ -144,7 +135,6 @@ def evaluate_model(model_path: str) -> None:
     else:
         print("  (No deliveries.)")
 
-    # 8) Save results as JSON (including the delivery count)
     out = {
         "model_name": model_name,
         "total_calls": total_calls,
@@ -154,7 +144,7 @@ def evaluate_model(model_path: str) -> None:
         "min_response_time_min": min_rt_min,
         "max_response_time_min": max_rt_min,
         "avg_decision_time_ms": avg_decision_time_ms,
-        "num_deliveries": num_deliveries,  # NEW: add total delivery count
+        "num_deliveries": num_deliveries, 
         "deliveries": deliveries,
     }
 

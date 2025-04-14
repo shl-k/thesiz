@@ -1,27 +1,9 @@
-"""
-DispatchRelocEnv – merges queue-based dispatch + relocation into one environment,
-with a single Discrete action space and partial rewards for scene arrival/hospital arrival.
-
-Action space: 
-  0..(N-1) => dispatch ambulance i
-  N        => no-dispatch
-We also allow partial rewards for scene arrival/hospital arrival
-between steps (accumulated in self.partial_reward).
-
-To remove 2D shape warnings and negative-lon errors:
- - We flatten the observation into a 1D Box with shape=(obs_dim,).
- - The Box range is [-9999, 9999].
-"""
-
 import os, sys, json
 from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import gymnasium as gym
 from gymnasium import spaces
 
-# ---------------------------------------------------------------------
-#  Import simulator classes
-# ---------------------------------------------------------------------
 current_dir  = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, "../.."))
 sys.path.append(project_root)

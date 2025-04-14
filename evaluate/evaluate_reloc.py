@@ -17,21 +17,18 @@ from stable_baselines3 import PPO
 from stable_baselines3.common.vec_env import DummyVecEnv, VecNormalize
 from stable_baselines3.common.evaluation import evaluate_policy
 
-# Add the project root to the Python path
+
 current_dir = os.path.dirname(os.path.abspath(__file__))
 project_root = os.path.abspath(os.path.join(current_dir, ".."))
 sys.path.append(project_root)
 
-# Import your environment & updated simulator
+
 from envs.dispatch_relocation_env import DispatchRelocEnv
 from src.simulator.simulator import AmbulanceSimulator
 
-# -----------------------------
-# USER: EDIT THESE AS NEEDED
-# -----------------------------
 MODEL_PATHS = [
     "models/reloc_M3/reloc_M3",
-    # Add more model paths here if you want to test them
+
 ]
 GRAPH_PATH = "data/processed/princeton_graph.gpickle"
 CALLS_PATH = "data/processed/synthetic_calls.csv"
@@ -52,18 +49,18 @@ def evaluate_model(model_path: str) -> None:
     model_name = Path(model_path).stem
     print(f"\n=== Evaluating {model_name} ===")
 
-    # 1) Load data & graph
+
     graph      = pickle.load(open(GRAPH_PATH, "rb"))
     calls      = pd.read_csv(CALLS_PATH)
     path_cache = pickle.load(open(CACHE_PATH, "rb"))
     node_to_idx= json.load(open(IDX_PATH, "r"))
     idx_to_node= json.load(open(NODE_PATH, "r"))
 
-    # Convert dictionary keys to int
+
     node_to_idx = {int(k): v for k, v in node_to_idx.items()}
     idx_to_node = {int(k): int(v) for k, v in idx_to_node.items()}
 
-    # 2) Create simulator
+
     sim = AmbulanceSimulator(
         graph=graph,
         call_data=calls,
@@ -79,7 +76,7 @@ def evaluate_model(model_path: str) -> None:
         verbose=False
     )
 
-    # 3) Create VecEnv w/ DispatchRelocEnv
+
     env = DummyVecEnv([lambda: DispatchRelocEnv(
         simulator=sim,
         n_clusters=8,  # adjust as needed
@@ -87,7 +84,7 @@ def evaluate_model(model_path: str) -> None:
         verbose=False
     )])
 
-    # If VecNormalize stats exist, load them
+
     vecnorm_path = model_path.replace(".zip", "_vecnorm.pkl")
     if os.path.exists(vecnorm_path):
         env = VecNormalize.load(vecnorm_path, env)
@@ -95,16 +92,16 @@ def evaluate_model(model_path: str) -> None:
         env.norm_reward = False
         print(f"Loaded VecNormalize stats from {vecnorm_path}")
 
-    # 4) Load model
+
     model = PPO.load(model_path)
     print(f"Loaded PPO model from {model_path}")
 
-    # Evaluate policy over multiple episodes
+
     print("\n===== Policy Evaluation (100 episodes) =====")
     mean_reward, std_reward = evaluate_policy(model, env, n_eval_episodes=100, deterministic=True)
     print(f"Mean reward: {mean_reward:.2f} ± {std_reward:.2f}")
 
-    # 5) Run simulation
+
     obs = env.reset()
     done = False
     decision_times = []
@@ -116,11 +113,11 @@ def evaluate_model(model_path: str) -> None:
         decision_times.append(t1 - t0)
         obs, _, done, _ = env.step(action)
 
-    # Print simulator statistics
+
     print("\n===== Simulation Statistics =====")
     sim._print_statistics()
 
-    # Print environment statistics
+
     print("\n===== Environment Statistics =====")
     env_stats = env.envs[0].get_stats()
     print(f"Total calls: {env_stats['total_calls']}")
@@ -131,7 +128,7 @@ def evaluate_model(model_path: str) -> None:
     else:
         print("No response times recorded")
 
-    # 6) Collect stats
+
     total_calls = sim.total_calls
     responded   = sim.calls_responded
     rts         = np.array(sim.response_times)
@@ -147,7 +144,6 @@ def evaluate_model(model_path: str) -> None:
     else:
         avg_rt_min = std_rt_min = min_rt_min = max_rt_min = None
 
-    # 7) Print summary
     print(f"\n--- RESULTS for {model_name} ---")
     print(f"Calls responded: {responded} / {total_calls}")
     if avg_rt_min is not None:
@@ -163,7 +159,6 @@ def evaluate_model(model_path: str) -> None:
     else:
         print("  (No deliveries.)")
 
-    # 8) Save results as JSON (including the delivery count)
     out = {
         "model_name": model_name,
         "total_calls": total_calls,
