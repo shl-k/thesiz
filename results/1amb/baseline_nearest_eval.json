@@ -1,0 +1,22 @@
+{
+  "model_name": "baseline_nearest",
+  "num_ambulances": 1,
+  "total_calls": 48,
+  "calls_responded": 27,
+  "calls_timed_out": 2,
+  "calls_missed": 19,
+  "calls_rescued": 0,
+  "pct_responded": 0.5625,
+  "avg_response_time_min": null,
+  "response_time_std_min": null,
+  "min_response_time": null,
+  "max_response_time": null,
+  "timeout_causes": {
+    "no_dispatch": 0,
+    "en_route_but_late": 2
+  },
+  "dispatch_counts": {
+    "0": 29
+  },
+  "calls_file": "data/processed/synthetic_calls.csv"
+}

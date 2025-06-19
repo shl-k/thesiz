@@ -1,0 +1,10 @@
+{
+  "model_name": "dispatch_M3",
+  "num_episodes": 10,
+  "avg_calls_responded": 0.0,
+  "std_calls_responded": 0.0,
+  "avg_response_time_min": null,
+  "std_response_time_min": null,
+  "avg_decision_time_ms": 0.4119295140971308,
+  "total_deliveries": 0
+}

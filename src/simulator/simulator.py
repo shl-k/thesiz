@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Dict, Optional, Tuple
 from collections import Counter
 
+
 import numpy as np
 import pandas as pd
 import networkx as nx
@@ -17,6 +18,7 @@ project_root = Path(__file__).parent.parent.parent
 sys.path.append(str(project_root))
 
 from src.simulator.ambulance import Ambulance, AmbulanceStatus
+
 
 SECONDS_IN_DAY = 24 * 3600
 
@@ -113,7 +115,7 @@ class AmbulanceSimulator:
         self.cancelled_event_ids.clear()
 
         # Build ambulances
-        from src.simulator.ambulance import Ambulance
+    
         self.ambulances = [
             Ambulance(
                 amb_id=i,
@@ -493,7 +495,7 @@ class AmbulanceSimulator:
             print(f"  • Ambulance en route but too late: {self.timeout_causes['en_route_but_late']}")
 
         if self.response_times:
-            avg_rt = np.mean(self.response_times)
+            avg_rt = np.mean(self.response_times) # inspect response time value and see if it's correct
             print(f"Avg response time: {avg_rt/60:.2f} min "
                   f"(min {min(self.response_times)/60:.2f}, max {max(self.response_times)/60:.2f})")
 

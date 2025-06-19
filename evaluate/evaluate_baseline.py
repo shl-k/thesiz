@@ -1,9 +1,8 @@
-# ========== CONFIG ==========
 CALLS_FILE = "data/processed/synthetic_calls.csv"
 NUM_AMBULANCES = 1
 EVAL_OUTPUT_PATH = f"results/{NUM_AMBULANCES}amb/baseline_nearest_eval.json"
 
-# ========== IMPORTS ==========
+
 import sys, os, pickle, json
 import pandas as pd
 import numpy as np
@@ -17,7 +16,7 @@ sys.path.append(project_root)
 from src.simulator.simulator import AmbulanceSimulator
 from src.simulator.policies import NearestDispatchPolicy, StaticRelocationPolicy
 
-# ========== EVALUATION SAVE HELPER ==========
+
 def save_eval_results(sim, model_name, out_path, calls_file=None, extra_metrics=None):
     response_times = np.array(sim.response_times)
 
@@ -47,7 +46,7 @@ def save_eval_results(sim, model_name, out_path, calls_file=None, extra_metrics=
         json.dump(results, f, indent=2)
     print(f"\n📁 Evaluation results saved to {out_path}")
 
-# ========== MAIN ==========
+
 def main():
     # Load environment data
     G = pickle.load(open("data/processed/princeton_graph.gpickle","rb"))
@@ -83,10 +82,10 @@ def main():
 
     # Calculate travel times for each call that was responded to
     travel_times = []
-    for call_id, call in simulator.call_status.items():
-        if call["status"] == "rescued":
-            amb = simulator.ambulances[call["ambulance_id"]]
-            travel_sec = simulator.path_cache[call["dispatch_location"]][call["origin_node"]]["travel_time"]
+    for call_id, call_info in simulator.call_status.items():
+        if isinstance(call_info, dict) and call_info.get("status") == "rescued":
+            amb = simulator.ambulances[call_info["ambulance_id"]]
+            travel_sec = simulator.path_cache[call_info["dispatch_location"]][call_info["origin_node"]]["travel_time"]
             travel_times.append(travel_sec / 60.0)  # Convert to minutes
 
     print("\n📊 Response Time Details:")
